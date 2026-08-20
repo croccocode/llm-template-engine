@@ -2,7 +2,7 @@
 
 Fires on every Read. Non-template files are allowed through immediately
 (cheap suffix check, no I/O). Template files are rendered and the Read is
-denied with a redirect to the compiled sibling file.
+denied with the rendered content embedded directly in the deny reason.
 """
 
 import json
@@ -12,7 +12,6 @@ import minijinja
 from pathlib import Path
 
 TEMPLATE_SUFFIX = ".tpl.md"
-COMPILED_SUFFIX = ".compiled.md"
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROMPTS_ROOT = PROJECT_ROOT / "prompts"
@@ -43,19 +42,13 @@ class TemplateRenderError(Exception):
     pass
 
 
-def render(file_path: Path) -> Path:
-
-
+def render(file_path: Path) -> str:
     relative_name = file_path.resolve().relative_to(PROMPTS_ROOT.resolve()).as_posix()
     env = minijinja.Environment(loader=minijinja.load_from_path([str(PROMPTS_ROOT)]))
     try:
-        rendered = env.render_template(relative_name)
+        return env.render_template(relative_name)
     except minijinja.TemplateError as exc:
         raise TemplateRenderError(str(exc)) from exc
-
-    compiled_path = file_path.with_name(file_path.name[: -len(TEMPLATE_SUFFIX)] + COMPILED_SUFFIX)
-    compiled_path.write_text(rendered, encoding="utf-8")
-    return rendered
 
 
 def main():
