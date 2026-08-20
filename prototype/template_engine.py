@@ -1,19 +1,17 @@
-"""PreToolUse hook on Read: expands *.tpl.md template files with MiniJinja.
+"""Render di template *.tpl.md con MiniJinja, condiviso fra gli hook.
 
-Fires on every Read. Non-template files are allowed through immediately
-(cheap suffix check, no I/O). Template files are rendered and the Read is
-denied with the rendered content embedded directly in the deny reason.
+Gli adapter (`.claude/hooks/render_template.py` per Claude Code,
+`.github/hooks/render_template.py` per Copilot CLI) parlano protocolli
+diversi ma usano tutti questo render.
 
 Any *.tpl.md anywhere in the repo can be rendered: includes resolve first
 against the template's own directory (local partials, short names), then
-fall back to the project root (e.g. `{% include "README.md" %}"). Path
-traversal (`..`) outside those two roots is rejected by MiniJinja itself.
+fall back to the project root (e.g. `{% include "README.md" %}`). Path
+traversal (`..`) outside those two roots is rejected by the loader.
 """
 
-import json
 import sys
 import tempfile
-import traceback
 import minijinja
 from functools import lru_cache
 from pathlib import Path
@@ -21,32 +19,15 @@ from pathlib import Path
 TEMPLATE_SUFFIX = ".tpl.md"
 _PROBE_STRING = "—"  # em dash: cheap canary for the mis-decode bug below
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-
-def allow():
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow",
-        }
-    }))
-    sys.exit(0)
-
-
-def deny(reason):
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": reason,
-        }
-    }))
-    sys.exit(0)
+PROJECT_ROOT = Path(__file__).resolve().parent
 
 
 class TemplateRenderError(Exception):
     pass
+
+
+def is_template(file_path: Path) -> bool:
+    return file_path.name.endswith(TEMPLATE_SUFFIX)
 
 
 def make_loader(roots: list[Path]):
@@ -100,30 +81,3 @@ def render(file_path: Path) -> str:
         return env.render_template(file_path.name)
     except minijinja.TemplateError as exc:
         raise TemplateRenderError(str(exc)) from exc
-
-
-def main():
-    payload = json.load(sys.stdin)
-
-    if payload.get("tool_name") != "Read":
-        allow()
-
-    file_path = Path(payload.get("tool_input", {}).get("file_path", ""))
-    if not file_path.name.endswith(TEMPLATE_SUFFIX):
-        allow()
-
-    try:
-        rendered = render(file_path)
-    except TemplateRenderError as exc:
-        deny(f"Errore nel render di '{file_path.name}': {exc}")
-        return
-    except Exception as exc:  # noqa: BLE001 - fail open: mai bloccare tutte le Read per un bug nell'hook
-        print(f"render_template hook error: {exc}\n{traceback.format_exc()}", file=sys.stderr)
-        allow()
-        return
-
-    deny(f"'{file_path.name}' e' un template sorgente. Eccoti il contenuto del file: {rendered}")
-
-
-if __name__ == "__main__":
-    main()

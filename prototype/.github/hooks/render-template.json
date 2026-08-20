@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "powershell": "foreach ($r in @('.', 'prototype')) { $py = Join-Path $r '.venv\\Scripts\\python.exe'; $h = Join-Path $r 'hooks\\render_template.py'; if ((Test-Path $py) -and (Test-Path $h)) { & $py $h --protocol copilot; break } }; exit 0",
+        "bash": "for r in . prototype; do for p in \"$r/.venv/bin/python\" \"$r/.venv/Scripts/python.exe\"; do h=\"$r/hooks/render_template.py\"; if [ -x \"$p\" ] && [ -f \"$h\" ]; then \"$p\" \"$h\" --protocol copilot; exit 0; fi; done; done; exit 0",
+        "timeoutSec": 15
+      }
+    ]
+  }
+}
