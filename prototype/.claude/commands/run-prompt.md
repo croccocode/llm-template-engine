@@ -1,5 +1,5 @@
 ---
-description: Esegue il prompt principale del progetto
+description: Runs the project's main prompt
 ---
 
-Apri `prompts/main.tpl.md` e segui le istruzioni contenute al suo interno.
+Open `prompts/main.tpl.md` and follow the instructions inside it.

@@ -2,36 +2,37 @@
 # requires-python = ">=3.14"
 # dependencies = ["minijinja>=2.22.0"]
 # ///
-# ^ PEP 723: uv provvede interprete e dipendenze da se', quindi installare
-# questo hook in un altro repo vuole solo `uv` e questi due file (l'hook e
-# `template_engine.py` accanto) — nessun venv, nessun pyproject, nessun pip.
+# ^ PEP 723: uv provides interpreter and dependencies by itself, so installing
+# this hook in another repo only takes `uv` and these two files (the hook and
+# `template_engine.py` next to it) — no venv, no pyproject, no pip.
 #
-# minijinja NON serve a questo file: la importa `template_engine`, che noi
-# importiamo sotto. Va comunque dichiarata qui perche' `uv run --script`
-# ignora di proposito il pyproject.toml del progetto. Se la bumpi la' senza
-# bumparla qui l'hook non protesta: esce 0 (vedi in fondo) e i .tpl.md
-# arrivano all'agente grezzi. Sono due posti, tenerli allineati e' manuale.
+# minijinja is NOT needed by this file: it is imported by `template_engine`,
+# which we import below. It must still be declared here because
+# `uv run --script` deliberately ignores the project's pyproject.toml. If you
+# bump it there without bumping it here the hook won't complain: it exits 0
+# (see the bottom) and .tpl.md files reach the agent raw. Two places, keeping
+# them in sync is manual.
 
-"""Hook pre-tool-use unico per Claude Code e Copilot CLI.
+"""Single pre-tool-use hook for Claude Code and Copilot CLI.
 
-Intercetta la lettura di un file `*.tpl.md`, lo espande con MiniJinja
-(`template_engine.py`) e restituisce il contenuto renderizzato all'agente
-dentro il motivo del rifiuto. I file non-template passano subito (check sul
-suffisso, nessuna I/O).
+Intercepts the reading of a `*.tpl.md` file, expands it with MiniJinja
+(`template_engine.py`) and returns the rendered content to the agent inside
+the denial reason. Non-template files pass through immediately (suffix
+check, no I/O).
 
-La logica e' una sola: cambia solo il *protocollo* dell'host, descritto nella
-tabella PROTOCOLS qui sotto — come si chiamano le chiavi in input, che forma
-ha il JSON in output, e se l'allow va dichiarato o basta il silenzio.
+The logic is one and the same: only the host *protocol* changes, described in
+the PROTOCOLS table below — what the input keys are called, what shape the
+output JSON has, and whether the allow must be declared or silence is enough.
 
-Quale protocollo usare lo dice l'host che ci invoca, perche' i due file di
-config sono comunque separati: `--protocol claude` da `.claude/settings.json`,
-`--protocol copilot` da `.github/hooks/render-template.json`. In mancanza si
-prova a dedurlo dalla forma del payload, che pero' e' ambigua: Copilot ha
-anche un formato "VS Code compatible" con le stesse chiavi di Claude.
+Which protocol to use is stated by the host invoking us, since the two config
+files are separate anyway: `--protocol claude` from `.claude/settings.json`,
+`--protocol copilot` from `.github/hooks/render-template.json`. Failing that
+we try to infer it from the payload shape, which is however ambiguous:
+Copilot also has a "VS Code compatible" format with the same keys as Claude.
 
-Su qualunque errore inatteso si esce 0 senza output. Non e' pignoleria: i
-command hook `preToolUse` di Copilot sono *fail-closed*, un exit != 0
-bloccherebbe ogni tool call della sessione.
+On any unexpected error we exit 0 with no output. This isn't fussiness:
+Copilot's `preToolUse` command hooks are *fail-closed*, a non-zero exit would
+block every tool call in the session.
 """
 
 import json
@@ -54,7 +55,7 @@ def _claude_output(decision: str, reason: str | None) -> str:
 
 def _copilot_output(decision: str, reason: str | None) -> str | None:
     if decision == "allow":
-        return None  # stdout vuoto = nessuna decisione, Copilot procede
+        return None  # empty stdout = no decision, Copilot proceeds
     return json.dumps(
         {"permissionDecision": decision, "permissionDecisionReason": reason},
         ensure_ascii=False,
@@ -63,24 +64,24 @@ def _copilot_output(decision: str, reason: str | None) -> str | None:
 
 PROTOCOLS = {
     "claude": {
-        # Chiavi del payload in ingresso.
+        # Keys of the incoming payload.
         "tool_name_keys": ("tool_name",),
         "tool_args_keys": ("tool_input",),
-        # Tool di lettura file da intercettare (confronto in minuscolo).
+        # File-reading tools to intercept (compared lowercased).
         "read_tools": {"read"},
-        # Chiavi dove cercare il path dentro gli argomenti del tool.
+        # Keys to look the path up under, inside the tool arguments.
         "path_keys": ("file_path",),
-        # Come si scrive la decisione su stdout. None = non stampare nulla.
+        # How the decision is written to stdout. None = print nothing.
         "output": _claude_output,
     },
     "copilot": {
         "tool_name_keys": ("toolName", "tool_name"),
-        # `toolArgs` e' una *stringa* JSON nei command hook della CLI, un
-        # oggetto nell'SDK: parse_tool_args() gestisce entrambi.
+        # `toolArgs` is a JSON *string* in the CLI command hooks, an object in
+        # the SDK: parse_tool_args() handles both.
         "tool_args_keys": ("toolArgs", "tool_input", "tool_args"),
-        # `view` e' il tool nativo; gli altri sono alias difensivi.
+        # `view` is the native tool; the others are defensive aliases.
         "read_tools": {"view", "read", "read_file", "str_replace_editor"},
-        # Copilot passa `path`; gli altri sono alias difensivi.
+        # Copilot passes `path`; the others are defensive aliases.
         "path_keys": ("path", "file_path", "filePath", "absolute_path"),
         "output": _copilot_output,
     },
@@ -88,7 +89,7 @@ PROTOCOLS = {
 
 
 def pick_protocol(argv: list[str]) -> dict | None:
-    """--protocol dalla riga di comando, poi env, poi niente."""
+    """--protocol from the command line, then env, then nothing."""
     name = os.environ.get("LTE_HOOK_PROTOCOL")
     for index, arg in enumerate(argv):
         if arg == "--protocol" and index + 1 < len(argv):
@@ -98,16 +99,16 @@ def pick_protocol(argv: list[str]) -> dict | None:
     if not name:
         return None
     protocol = PROTOCOLS.get(name.lower())
-    if protocol is None:  # typo nel config: dillo, non cadere zitto sullo sniffing
-        print(f"protocollo '{name}' sconosciuto, provo a dedurlo dal payload",
+    if protocol is None:  # typo in the config: say so, don't fall silently back to sniffing
+        print(f"unknown protocol '{name}', trying to infer it from the payload",
               file=sys.stderr)
     return protocol
 
 
 def sniff_protocol(payload: dict) -> dict | None:
-    """Fallback: le chiavi camelCase sono solo di Copilot. Le snake_case sono
-    ambigue (Claude, ma anche Copilot in formato VS Code) e le trattiamo come
-    Claude, che e' l'unico dei due a *pretendere* un output esplicito."""
+    """Fallback: camelCase keys belong to Copilot only. snake_case ones are
+    ambiguous (Claude, but also Copilot in VS Code format) and we treat them
+    as Claude, the only one of the two that *demands* an explicit output."""
     if "toolName" in payload or "toolArgs" in payload:
         return PROTOCOLS["copilot"]
     if "tool_name" in payload or "tool_input" in payload:
@@ -121,7 +122,7 @@ def first_value(source: dict, keys: tuple[str, ...]):
 
 def parse_tool_args(payload: dict, protocol: dict) -> dict:
     args = first_value(payload, protocol["tool_args_keys"])
-    if isinstance(args, str):  # command hook di Copilot: stringa JSON
+    if isinstance(args, str):  # Copilot command hook: JSON string
         try:
             args = json.loads(args)
         except json.JSONDecodeError:
@@ -130,7 +131,7 @@ def parse_tool_args(payload: dict, protocol: dict) -> dict:
 
 
 def read_payload() -> dict:
-    # utf-8-sig: alcune shell (PowerShell) prependono un BOM su stdin.
+    # utf-8-sig: some shells (PowerShell) prepend a BOM on stdin.
     raw = sys.stdin.buffer.read().decode("utf-8-sig").strip()
     return json.loads(raw) if raw else {}
 
@@ -148,27 +149,27 @@ def decide(payload: dict, protocol: dict) -> tuple[str, str | None]:
     if not is_template(file_path):
         return "allow", None
     if not file_path.is_absolute():
-        # Copilot puo' passare path relativi alla cwd della sessione.
+        # Copilot may pass paths relative to the session cwd.
         file_path = Path(payload.get("cwd") or Path.cwd()) / file_path
 
     try:
         rendered = render(file_path)
     except TemplateRenderError as exc:
-        return "deny", f"Errore nel render di '{file_path.name}': {exc}"
+        return "deny", f"Error rendering '{file_path.name}': {exc}"
 
     return "deny", (
-        f"'{file_path.name}' e' un template sorgente. "
-        f"Eccoti il contenuto del file: {rendered}"
+        f"'{file_path.name}' is a source template. "
+        f"Here is the content of the file: {rendered}"
     )
 
 
 def main():
-    sys.stdout.reconfigure(encoding="utf-8")  # il rendered puo' contenere non-ASCII
+    sys.stdout.reconfigure(encoding="utf-8")  # the rendered output may contain non-ASCII
     payload = read_payload()
 
     protocol = pick_protocol(sys.argv[1:]) or sniff_protocol(payload)
     if protocol is None:
-        return  # host sconosciuto: stdout vuoto, che ovunque vale "procedi"
+        return  # unknown host: empty stdout, which everywhere means "proceed"
 
     line = protocol["output"](*decide(payload, protocol))
     if line is not None:
@@ -178,6 +179,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except Exception as exc:  # noqa: BLE001 - mai uscire != 0: su Copilot sarebbe un deny
+    except Exception as exc:  # noqa: BLE001 - never exit != 0: on Copilot that's a deny
         print(f"render_template hook error: {exc}\n{traceback.format_exc()}", file=sys.stderr)
     sys.exit(0)

@@ -1,11 +1,11 @@
 ---
 name: run-prompt
-description: Esegue il prompt principale del progetto (prompts/main.tpl.md), espanso dall'hook preToolUse
+description: Runs the project's main prompt (prompts/main.tpl.md), expanded by the preToolUse hook
 ---
 
-Apri `prompts/main.tpl.md` e segui le istruzioni contenute al suo interno.
+Open `prompts/main.tpl.md` and follow the instructions inside it.
 
-Il file e' un template: l'hook `preToolUse` intercetta la lettura, lo espande
-con MiniJinja e ti restituisce il contenuto renderizzato al posto del sorgente.
-Non provare a leggerlo con `bash`/`cat`: quel percorso non passa dall'hook e
-vedresti i tag `{% include %}` non espansi.
+The file is a template: the `preToolUse` hook intercepts the read, expands it
+with MiniJinja and returns the rendered content to you instead of the source.
+Do not try to read it with `bash`/`cat`: that path does not go through the
+hook and you would see the `{% include %}` tags unexpanded.

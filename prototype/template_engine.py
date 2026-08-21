@@ -1,18 +1,18 @@
-"""Render di template *.tpl.md con MiniJinja, condiviso fra gli hook.
+"""Rendering of *.tpl.md templates with MiniJinja, shared by the hooks.
 
-Gli adapter (`.claude/hooks/render_template.py` per Claude Code,
-`.github/hooks/render_template.py` per Copilot CLI) parlano protocolli
-diversi ma usano tutti questo render.
+The adapters (`.claude/hooks/render_template.py` for Claude Code,
+`.github/hooks/render_template.py` for Copilot CLI) speak different
+protocols but all use this renderer.
 
 Any *.tpl.md anywhere in the repo can be rendered: includes resolve first
 against the template's own directory (local partials, short names), then
 fall back to the project root (e.g. `{% include "README.md" %}`). Path
 traversal (`..`) outside those two roots is rejected by the loader.
 
-Oltre agli include, un template puo' interpolare l'output di uno script bash
-con `{{ sh("scripts/now.sh") }}`: stessa risoluzione dei path degli include,
-stdout dello script al posto della chiamata. E' esecuzione di codice
-arbitrario per progetto: il template *e'* il codice, come per gli hook.
+Besides includes, a template can interpolate the output of a bash script
+with `{{ sh("scripts/now.sh") }}`: same path resolution as includes, the
+script's stdout replacing the call. This is arbitrary code execution per
+project: the template *is* code, just like a hook.
 """
 
 import os
@@ -40,8 +40,8 @@ def is_template(file_path: Path) -> bool:
 
 
 def resolve_in_roots(name: str, roots: list[Path]) -> Path | None:
-    """Primo file esistente fra `roots`, nell'ordine. Come load_from_path,
-    scarta i candidati che (via `..`) escono dalla root da cui partono."""
+    """First existing file among `roots`, in order. Like load_from_path, it
+    discards candidates that (via `..`) escape the root they start from."""
     for root in roots:
         candidate = (root / name).resolve()
         try:
@@ -70,11 +70,11 @@ def make_loader(roots: list[Path]):
 
 @lru_cache(maxsize=1)
 def _bash_is_wsl(bash: str) -> bool:
-    """Su Windows `bash` puo' essere Git for Windows (path nativi Windows
-    vanno bene cosi' come sono, montati direttamente) o lo stub WSL in
-    System32 (vuole path Linux tipo /mnt/c/...; un path con backslash gli
-    arriva spezzettato e il file "non esiste"). Li distinguiamo una sola
-    volta chiedendo a bash stesso chi e'."""
+    """On Windows `bash` may be Git for Windows (native Windows paths work
+    as they are, mounted directly) or the WSL stub in System32 (it wants
+    Linux paths like /mnt/c/...; a path with backslashes arrives mangled and
+    the file "does not exist"). We tell them apart once by asking bash
+    itself who it is."""
     if sys.platform != "win32":
         return False
     try:
@@ -85,14 +85,14 @@ def _bash_is_wsl(bash: str) -> bool:
             timeout=SCRIPT_TIMEOUT_SECONDS,
         )
         return "microsoft" in result.stdout.lower()
-    except Exception:  # noqa: BLE001 - non sapere non e' fatale, si assume Git Bash
+    except Exception:  # noqa: BLE001 - not knowing isn't fatal, assume Git Bash
         return False
 
 
 def _to_bash_path(path: Path, bash: str) -> str:
-    """Converte un path Windows nella forma che il `bash` risolto si
-    aspetta come argomento di riga di comando (lo stub WSL vuole
-    /mnt/<drive>/..., Git for Windows accetta il path nativo)."""
+    """Converts a Windows path into the form the resolved `bash` expects as a
+    command line argument (the WSL stub wants /mnt/<drive>/..., Git for
+    Windows accepts the native path)."""
     if not _bash_is_wsl(bash):
         return str(path)
     drive, tail = os.path.splitdrive(path)
@@ -102,12 +102,12 @@ def _to_bash_path(path: Path, bash: str) -> str:
 
 
 def make_sh(roots: list[Path]):
-    """La funzione `sh(script, *args)` esposta ai template.
+    """The `sh(script, *args)` function exposed to templates.
 
-    Cerca lo script con le stesse regole degli include, lo esegue con bash e
-    restituisce il suo stdout (senza il newline finale, per interpolarlo
-    inline). Un'uscita != 0 e' un errore di render, non una stringa vuota
-    silenziosa: meglio un prompt che non parte di uno che mente.
+    Looks the script up with the same rules as includes, runs it with bash
+    and returns its stdout (without the trailing newline, so it can be
+    interpolated inline). A non-zero exit is a render error, not a silent
+    empty string: better a prompt that doesn't start than one that lies.
     """
     resolved_roots = [root.resolve() for root in roots]
 
@@ -115,15 +115,15 @@ def make_sh(roots: list[Path]):
         path = resolve_in_roots(script, resolved_roots)
         if path is None:
             raise TemplateRenderError(
-                f"script '{script}' non trovato in "
+                f"script '{script}' not found in "
                 f"{', '.join(str(root) for root in resolved_roots)}"
             )
-        # Su Windows bash arriva da Git for Windows o da WSL; in entrambi i
-        # casi sta nel PATH. Niente shell=True: gli argomenti restano tali.
+        # On Windows bash comes from Git for Windows or from WSL; either way
+        # it is on the PATH. No shell=True: arguments stay arguments.
         bash = shutil.which("bash")
         if bash is None:
             raise TemplateRenderError(
-                f"'{script}': bash non trovato nel PATH"
+                f"'{script}': bash not found on the PATH"
             )
         try:
             result = subprocess.run(
@@ -133,17 +133,17 @@ def make_sh(roots: list[Path]):
                 encoding="utf-8",
                 errors="replace",
                 timeout=SCRIPT_TIMEOUT_SECONDS,
-                # cwd fissa: lo stesso template deve rendere uguale da
-                # qualunque directory l'agente sia stato lanciato.
+                # fixed cwd: the same template must render identically no
+                # matter which directory the agent was launched from.
                 cwd=PROJECT_ROOT,
             )
         except subprocess.TimeoutExpired:
             raise TemplateRenderError(
-                f"script '{script}' non finito entro {SCRIPT_TIMEOUT_SECONDS}s"
+                f"script '{script}' did not finish within {SCRIPT_TIMEOUT_SECONDS}s"
             ) from None
         if result.returncode != 0:
             raise TemplateRenderError(
-                f"script '{script}' uscito con codice {result.returncode}: "
+                f"script '{script}' exited with code {result.returncode}: "
                 f"{(result.stderr or '').strip()}"
             )
         return result.stdout.rstrip("\r\n")

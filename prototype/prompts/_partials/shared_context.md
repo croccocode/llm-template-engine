@@ -1,4 +1,4 @@
-## Contesto condiviso
+## Shared context
 
-Questo blocco vive in un file separato ed e' incluso al momento del render.
-Se lo vedi espanso qui dentro, il pre-hook funziona.
+This block lives in a separate file and is included at render time.
+If you see it expanded in here, the pre-hook works.

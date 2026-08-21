@@ -1,18 +1,18 @@
-# Prompt di test
+# Test prompt
 
-Questo e' un prompt di prova per il template engine.
+This is a test prompt for the template engine.
 
 {% include "_partials/shared_context.md" %}
 
-## Data e ora di sistema
+## System date and time
 
 {{ sh("scripts/now.sh") }}
 
 {% include "README.md" %}
 
-Domande:
+Questions:
 
-1. In base al README qui sopra, quale motore di template usa questo progetto per espandere gli include?
-2. Che giorno e' oggi?
+1. Based on the README above, which template engine does this project use to expand includes?
+2. What day is it today?
 
-Rispondi in una riga per domanda, in modo conciso.
+Answer in one line per question, concisely.

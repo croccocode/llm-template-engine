@@ -1,0 +1,3 @@
+# Scripts in scripts/ run under bash on Windows too: with CRLF, bash sees the
+# \r as part of the last argument ("$'\r': command not found").
+*.sh text eol=lf
