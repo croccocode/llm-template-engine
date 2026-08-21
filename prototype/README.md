@@ -1,6 +1,6 @@
 # llm-template-engine — prototype
 
-Prototipo di template engine per prompt LLM: un hook `preToolUse` intercetta ogni lettura di file `.tpl.md`, li espande con **MiniJinja** (include risolti prima nella cartella del file, poi nella root del progetto) e restituisce il contenuto già renderizzato direttamente nel messaggio di `deny`, senza scrivere file compilati su disco.
+Prototipo di template engine per prompt LLM: un hook `preToolUse` intercetta ogni lettura di file `.tpl.md`, li espande con **MiniJinja** (include risolti prima nella cartella del file, poi nella root del progetto; `sh("…")` per interpolare l'output di uno script bash) e restituisce il contenuto già renderizzato direttamente nel messaggio di `deny`, senza scrivere file compilati su disco.
 
 Lo stesso motore gira su due agenti: **Claude Code** e **GitHub Copilot CLI**. Un solo hook serve entrambi: cambia il protocollo, non la logica.
 
@@ -23,6 +23,7 @@ template_engine.py              # render MiniJinja
 hooks/render_template.py        # hook unico: tabella PROTOCOLS + decisione
 prompts/main.tpl.md             # template di prova
 prompts/_partials/…             # partial incluse
+scripts/now.sh                  # script di prova: data e ora di sistema
 .claude/settings.json               # registra l'hook: --protocol claude
 .claude/commands/run-prompt.md      # slash command /run-prompt
 .github/hooks/render-template.json  # registra l'hook: --protocol copilot
@@ -32,6 +33,22 @@ prompts/_partials/…             # partial incluse
 Leggere stdin, filtrare il suffisso, chiamare il render e gestire gli errori è codice comune. Dell'host dipendono solo tre cose, che stanno nel dizionario `PROTOCOLS`: i nomi delle chiavi in input, la forma del JSON in output, e se l'allow va dichiarato o basta il silenzio.
 
 Chi ci sta invocando lo dice l'host stesso via `--protocol` (o `LTE_HOOK_PROTOCOL`), perché i due file di config sono comunque separati. Non lo deduciamo dal payload se non come fallback: la forma è ambigua, perché Copilot supporta anche un formato *VS Code compatible* con le stesse chiavi `tool_name` / `tool_input` di Claude.
+
+## Script shell nei template
+
+Oltre agli include, un template può interpolare l'output di uno script bash:
+
+```jinja
+{{ sh("scripts/now.sh") }}
+```
+
+`sh(script, *args)` risolve il path con le **stesse regole degli include** (prima la cartella del template, poi la root del progetto; `..` fuori da entrambe è scartato), esegue lo script con `bash` — cwd fissa sulla root, così lo stesso template rende uguale da qualunque directory sia partito l'agente — e sostituisce la chiamata con il suo **stdout**, senza il newline finale. Gli argomenti extra arrivano allo script come `$1`, `$2`, … e non passano da una shell: niente `shell=True`, niente riquoting.
+
+Se lo script manca, esce ≠ 0, o supera `SCRIPT_TIMEOUT_SECONDS` (30 s), il render **fallisce** e l'agente riceve l'errore con lo stderr dentro, al posto del template. Un prompt che non parte è meglio di uno che mente su un buco silenzioso.
+
+Su Windows `bash` è quello di Git for Windows (o WSL), preso dal `PATH`. Attenzione al `%Z` di `date`: su Git for Windows torna vuoto, `scripts/now.sh` usa `%z`.
+
+È esecuzione di codice arbitrario a ogni lettura di un `.tpl.md`, per progetto e senza conferma — esattamente come un hook. Un template *è* codice: trattalo come tale in review e non renderizzare template che non hai scritto tu.
 
 ## Claude Code
 
@@ -52,6 +69,8 @@ Config in `.github/hooks/*.json` (repo) o `~/.copilot/hooks/*.json` (utente), co
 | allow | JSON esplicito | stdout vuoto, exit 0 |
 | deny | JSON annidato in `hookSpecificOutput` | `{"permissionDecision":"deny","permissionDecisionReason":…}` piatto, su una riga |
 | errori dell'hook | fail-open | **fail-closed**: exit ≠ 0 = deny |
+
+Il comando invoca l'hook con un path **relativo** (`hooks/render_template.py`): Copilot non espone una variabile tipo `${CLAUDE_PROJECT_DIR}`, ma esegue l'hook con la cwd sulla directory del progetto — quella che contiene il `.github/` da cui ha letto il config. Verificato lanciando `copilot` sia da `prototype/` sia dalla directory padre: in entrambi i casi l'hook scatta. Non serve quindi cercare la root del progetto.
 
 Due conseguenze pratiche su Copilot:
 
@@ -78,4 +97,4 @@ copilot           # poi: /agent → run-prompt
   uv run --script hooks\render_template.py --protocol copilot
 ```
 
-Se `view` viene negato con dentro il template espanso (partial e README inclusi), l'hook funziona.
+Se `view` viene negato con dentro il template espanso (partial e README inclusi, data e ora di sistema al posto della chiamata a `sh`), l'hook funziona.
