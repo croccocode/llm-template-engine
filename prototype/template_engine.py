@@ -15,6 +15,7 @@ stdout dello script al posto della chiamata. E' esecuzione di codice
 arbitrario per progetto: il template *e'* il codice, come per gli hook.
 """
 
+import os
 import shutil
 import subprocess
 import sys
@@ -67,6 +68,39 @@ def make_loader(roots: list[Path]):
     return loader
 
 
+@lru_cache(maxsize=1)
+def _bash_is_wsl(bash: str) -> bool:
+    """Su Windows `bash` puo' essere Git for Windows (path nativi Windows
+    vanno bene cosi' come sono, montati direttamente) o lo stub WSL in
+    System32 (vuole path Linux tipo /mnt/c/...; un path con backslash gli
+    arriva spezzettato e il file "non esiste"). Li distinguiamo una sola
+    volta chiedendo a bash stesso chi e'."""
+    if sys.platform != "win32":
+        return False
+    try:
+        result = subprocess.run(
+            [bash, "-c", "uname -r"],
+            capture_output=True,
+            text=True,
+            timeout=SCRIPT_TIMEOUT_SECONDS,
+        )
+        return "microsoft" in result.stdout.lower()
+    except Exception:  # noqa: BLE001 - non sapere non e' fatale, si assume Git Bash
+        return False
+
+
+def _to_bash_path(path: Path, bash: str) -> str:
+    """Converte un path Windows nella forma che il `bash` risolto si
+    aspetta come argomento di riga di comando (lo stub WSL vuole
+    /mnt/<drive>/..., Git for Windows accetta il path nativo)."""
+    if not _bash_is_wsl(bash):
+        return str(path)
+    drive, tail = os.path.splitdrive(path)
+    if not drive:
+        return str(path)
+    return f"/mnt/{drive[0].lower()}{tail.replace(chr(92), '/')}"
+
+
 def make_sh(roots: list[Path]):
     """La funzione `sh(script, *args)` esposta ai template.
 
@@ -93,7 +127,7 @@ def make_sh(roots: list[Path]):
             )
         try:
             result = subprocess.run(
-                [bash, str(path), *(str(arg) for arg in args)],
+                [bash, _to_bash_path(path, bash), *(str(arg) for arg in args)],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
