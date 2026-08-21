@@ -4,6 +4,18 @@ Prototipo di template engine per prompt LLM: un hook `preToolUse` intercetta ogn
 
 Lo stesso motore gira su due agenti: **Claude Code** e **GitHub Copilot CLI**. Un solo hook serve entrambi: cambia il protocollo, non la logica.
 
+## Requisiti
+
+Solo [uv](https://docs.astral.sh/uv/). Nient'altro: né Python installato, né venv, né `pip install`.
+
+L'hook gira con `uv run --script` e dichiara le sue dipendenze in un header [PEP 723](https://peps.python.org/pep-0723/), quindi uv si procura interprete (`>=3.14`) e MiniJinja da sé al primo avvio. Per installarlo in un altro repo bastano `hooks/render_template.py`, `template_engine.py` accanto e il file di config dell'host: nessun `pyproject.toml` richiesto nel repo di destinazione, che può anche non essere un progetto Python.
+
+Il primo render paga il provisioning una volta sola (~0,7 s a cache vuota per la sola MiniJinja; qualche decina di secondi se uv deve anche scaricare l'interprete), poi l'overhead è ~50 ms per chiamata. Conviene scaldare la cache fuori banda, prima di avviare l'agente — su Copilot un timeout dell'hook è fail-closed:
+
+```powershell
+echo '{}' | uv run --script hooks\render_template.py --protocol claude
+```
+
 ## Struttura
 
 ```
@@ -63,7 +75,7 @@ copilot           # poi: /agent → run-prompt
 
 # hook a mano
 '{"toolName":"view","toolArgs":"{\"path\":\"prompts/main.tpl.md\"}"}' |
-  .\.venv\Scripts\python.exe hooks\render_template.py --protocol copilot
+  uv run --script hooks\render_template.py --protocol copilot
 ```
 
 Se `view` viene negato con dentro il template espanso (partial e README inclusi), l'hook funziona.

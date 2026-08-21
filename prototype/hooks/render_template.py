@@ -1,3 +1,17 @@
+# /// script
+# requires-python = ">=3.14"
+# dependencies = ["minijinja>=2.22.0"]
+# ///
+# ^ PEP 723: uv provvede interprete e dipendenze da se', quindi installare
+# questo hook in un altro repo vuole solo `uv` e questi due file (l'hook e
+# `template_engine.py` accanto) — nessun venv, nessun pyproject, nessun pip.
+#
+# minijinja NON serve a questo file: la importa `template_engine`, che noi
+# importiamo sotto. Va comunque dichiarata qui perche' `uv run --script`
+# ignora di proposito il pyproject.toml del progetto. Se la bumpi la' senza
+# bumparla qui l'hook non protesta: esce 0 (vedi in fondo) e i .tpl.md
+# arrivano all'agente grezzi. Sono due posti, tenerli allineati e' manuale.
+
 """Hook pre-tool-use unico per Claude Code e Copilot CLI.
 
 Intercetta la lettura di un file `*.tpl.md`, lo espande con MiniJinja

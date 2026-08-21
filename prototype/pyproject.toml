@@ -3,5 +3,7 @@ name = "prototype"
 version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = [
+    # Duplicata nell'header PEP 723 di hooks/render_template.py, che gira con
+    # `uv run --script` e quindi non legge questo file. Bumpare in entrambi.
     "minijinja>=2.22.0",
 ]
