@@ -27,18 +27,8 @@ class Decision(StrEnum):
     """Parse the file as a template."""
 
 TEMPLATE_SUFFIXES = (".md", ".txt")
-RAW_TERMINATOR = re.compile(r"\{%[-+]?\s*endraw\s*[-+]?%\}")
 SCRIPT_TIMEOUT_SECONDS = 30
-
-PROJECT_ROOT = Path(__file__).resolve().parent
-
-logging.basicConfig(
-    filename=PROJECT_ROOT / "lltpl.log",
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-)
-logger = logging.getLogger("lltpl")
-
+PROJECT_ROOT = None
 
 class TemplateRenderError(Exception):
     pass
@@ -63,36 +53,24 @@ def resolve_in_roots(name: str, roots: list[Path]) -> Path | None:
 
 
 def make_loader(roots: list[Path]):
-    # Custom loader instead of minijinja.load_from_path, for two reasons.
-    # First, load_from_path mis-decodes non-ASCII bytes on Windows (em dashes
-    # come back as "â€”"); reading the files ourselves with an explicit UTF-8
-    # decode avoids that. Second, it cannot tell templates from plain files,
-    # and only *.tpl.md may be evaluated (see below). We re-implement its
-    # traversal guard: reject any candidate that resolves outside its root.
+    # Custom loader instead of minijinja.load_from_path:
+    # - load_from_path mis-decodes non-ASCII bytes on Windows 
+    #   (em dashes come back as "â€”");
+    # - add 2 search roots: first try to resolve {% include %} relative to the current file
+    #   then starts from the tool root
     resolved_roots = [root.resolve() for root in roots]
 
     def loader(name: str):
         candidate = resolve_in_roots(name, resolved_roots)
         if candidate is None:
+            # file not found :(
             return None
+        
         source = candidate.read_text(encoding="utf-8")
-        # Only *.tpl.md files are templates. Everything else is inlined
-        # verbatim: a plain .md must not have its {{ }} / {% %} evaluated.
-        # Otherwise including any markdown file would be arbitrary code
-        # execution, since `sh()` is in scope during the render.
-        if is_template(Path(name)):
-            return source
-        # A literal raw-terminator in the text would close our wrapper early
-        # and leave the tail to be parsed. So each one is stepped around:
-        # close the raw block, emit the terminator as a plain string
-        # expression, reopen. This keeps documents that *talk about* the
-        # engine inlinable -- this project's own README is one of them.
-        escaped = RAW_TERMINATOR.sub(
-            lambda match: "{%% endraw %%}{{ %s }}{%% raw %%}" % json.dumps(match.group(0)),
-            source,
-        )
-        return f"{{% raw %}}{escaped}{{% endraw %}}"
-
+        
+        # Follow recursively the template as per the minijinja default behavior
+        # We check if a fle is_Template only to "activate" the template engine. 
+        return source
     return loader
 
 
@@ -182,7 +160,9 @@ def make_sh(roots: list[Path]):
 def render(file_path: Path) -> str:
     roots = [file_path.resolve().parent, PROJECT_ROOT]
     env = minijinja.Environment(loader=make_loader(roots))
+    
     env.add_function("sh", make_sh(roots))
+    
     try:
         return env.render_template(file_path.name)
     except minijinja.TemplateError as exc:
@@ -212,8 +192,8 @@ class ToolCall:
 
     tool_name: str
     is_read: bool  # whether tool_name is one of the host's file-reading tools
-    file_path: str | None
-    cwd: str | None
+    file_path: str
+    cwd: str
 
 
 def sniff_protocol() -> str:
@@ -273,24 +253,26 @@ def read_payload() -> dict:
 
 def decide(call: ToolCall) -> tuple[Decision, str | None]:
     if not call.is_read or not call.file_path:
-        logger.info(f"tool call is not file_read, PASS call=call")
+        logging.debug(f"tool call is not file_read, PASS call={call}")
         return Decision.PASS, None
 
     file_path = Path(call.file_path)
     if not is_template(file_path):
-        logger.info(f"file is not a template, PASS call={call}")
+        logging.debug(f"file is not a template, PASS call={call}")
         return Decision.PASS, None
     
     if not file_path.is_absolute():
         # Copilot may pass paths relative to the session cwd.
         file_path = Path(call.cwd or Path.cwd()) / file_path
 
+    logging.debug(f"rendering template for file={file_path}")
     try:
         rendered = render(file_path)
     except TemplateRenderError as exc:
-        logger.error(f"error parsing template! err={exc}")
-        return Decision.PARSE, f"Error rendering '{file_path.name}': {exc}"
+        logging.error(f"error parsing template, let the tool to read it error={exc}")
+        return Decision.PASS, f"Error rendering '{file_path.name}': {exc}"
 
+    logging.debug(f"template rendered, send it to the tool")
     return Decision.PARSE, (
         f"'{file_path.name}' is a source template. "
         f"Here is the content of the file: {rendered}"
@@ -301,11 +283,8 @@ def main():
     
     protocol = sniff_protocol()
     if protocol == "":
-        logger.error("unkown protocol, skipping hook")
         raise RuntimeError("unknown protocol - where are you invoking this hook from?")
 
-    logger.info(f" detected protocol {protocol}")        
-        
     payload = read_payload()
     tool_call : ToolCall
     if protocol == "claude":
@@ -314,6 +293,16 @@ def main():
         tool_call = parse_copilot(payload)
     else:
         raise RuntimeError("unknown protocol, nothing to parse")
+
+    # noinspection PyShadowingNames
+    # this is intended: the "root" is the root of the tool
+    PROJECT_ROOT = Path(tool_call.cwd)
+    logging.basicConfig(
+        filename=PROJECT_ROOT / "lltpl.log",
+        level=logging.DEBUG,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )    
+    logging.debug(f" detected protocol={protocol}")        
         
     decision, rendered_tpl = decide(tool_call)
     out = None
@@ -330,6 +319,12 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except Exception as exc:  # noqa: BLE001 - never exit != 0: on Copilot that's a deny
+    except Exception as exc:  
         print(f"render_template hook error: {exc}\n{traceback.format_exc()}", file=sys.stderr)
+        # exit 2 
+        #   -> on Claude Code it blocks the Read and feeds stderr to the model,
+        #      so the agent sees the error instead of the raw template
+        #   -> on Copilot every non-zero exit is a deny, and stderr reaches
+        #      the user either way
+        sys.exit(2)
     sys.exit(0)
