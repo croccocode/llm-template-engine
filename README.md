@@ -4,7 +4,6 @@
 - [] render only .md and .txt
 - [] add an `--include=<regexp>` param that threat only the filename that match the regexp as template (override the default, allow multiple values) 
 - [] add an `--exclude=<regexp>` param that threat only the filename that match the regexp as template (oonly file that do not match the regexp are threated as template) 
- 
 
 A template engine for LLM prompts base on MiniJinja template engine.
 
