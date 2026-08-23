@@ -1,0 +1,36 @@
+/* tslint:disable */
+/* eslint-disable */
+export const memory: WebAssembly.Memory;
+export const __wbg_environment_free: (a: number, b: number) => void;
+export const environment_addFilter: (a: number, b: number, c: number, d: number) => void;
+export const environment_addGlobal: (a: number, b: number, c: number, d: number, e: number) => void;
+export const environment_addTemplate: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+export const environment_addTest: (a: number, b: number, c: number, d: number) => void;
+export const environment_clearTemplates: (a: number) => void;
+export const environment_debug: (a: number) => number;
+export const environment_enablePyCompat: (a: number) => void;
+export const environment_evalExpr: (a: number, b: number, c: number, d: number, e: number) => void;
+export const environment_fuel: (a: number) => number;
+export const environment_keepTrailingNewline: (a: number) => number;
+export const environment_lstripBlocks: (a: number) => number;
+export const environment_new: () => number;
+export const environment_removeGlobal: (a: number, b: number, c: number) => void;
+export const environment_removeTemplate: (a: number, b: number, c: number) => void;
+export const environment_renderNamedStr: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+export const environment_renderStr: (a: number, b: number, c: number, d: number, e: number) => void;
+export const environment_renderTemplate: (a: number, b: number, c: number, d: number, e: number) => void;
+export const environment_setLoader: (a: number, b: number) => void;
+export const environment_setPathJoinCallback: (a: number, b: number) => void;
+export const environment_set_debug: (a: number, b: number) => void;
+export const environment_set_fuel: (a: number, b: number) => void;
+export const environment_set_keepTrailingNewline: (a: number, b: number) => void;
+export const environment_set_lstripBlocks: (a: number, b: number) => void;
+export const environment_set_trimBlocks: (a: number, b: number) => void;
+export const environment_set_undefinedBehavior: (a: number, b: number, c: number) => void;
+export const environment_trimBlocks: (a: number) => number;
+export const environment_undefinedBehavior: (a: number) => number;
+export const __wbindgen_export_0: (a: number, b: number) => number;
+export const __wbindgen_export_1: (a: number, b: number, c: number, d: number) => number;
+export const __wbindgen_export_2: (a: number) => void;
+export const __wbindgen_export_3: (a: number, b: number, c: number) => void;
+export const __wbindgen_add_to_stack_pointer: (a: number) => number;

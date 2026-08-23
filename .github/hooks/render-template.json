@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "powershell": "node hooks\\render_template.mjs --protocol copilot; exit 0",
+        "bash": "node hooks/render_template.mjs --protocol copilot; exit 0",
+        "timeoutSec": 60
+      }
+    ]
+  }
+}

@@ -17,8 +17,9 @@ coverage.*
 *.coverprofile
 profile.cov
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
+# Dependency directories. Do NOT ignore vendor/: it holds the vendored
+# minijinja-js WASM build the engine loads at runtime, and it must be committed.
+node_modules/
 
 # Go workspace file
 go.work
@@ -28,5 +29,5 @@ go.work.sum
 .env
 
 # Editor/IDE
-# .idea/
+.idea/
 # .vscode/

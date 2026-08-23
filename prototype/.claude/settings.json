@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --script \"${CLAUDE_PROJECT_DIR}\\hooks\\render_template.py\" --protocol claude",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}
