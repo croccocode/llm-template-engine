@@ -13,18 +13,13 @@ and perform those instruction on any *.json file in the folder ./zoo
 This simple prompt will cost 3 Tool API call and probably 4 API Call (input token, output token)
 This code allows you to reqrite the template as follows:
 ```jinja
-# Instructions
+
+Apply these instructions
 {% include ../another/file.md %}
 
-For each of this file
-{% set ns = exec("
-from pathlib import Path
-files = sorted(p.name for p in Path('./files').iterdir() if p.is_file())
-") %}
+To each of these files
+{{ sh("ls -1") }}
 
-{% for f in ns.files %}
-- {{ f }}
-{% endfor %}
 
 ```
 

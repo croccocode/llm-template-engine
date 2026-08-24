@@ -16,7 +16,6 @@ import textwrap
 import traceback
 from dataclasses import dataclass
 from enum import StrEnum
-from functools import lru_cache
 from pathlib import Path
 
 import minijinja
@@ -109,67 +108,24 @@ def make_loader(roots: list[Path]):
     return loader
 
 
-@lru_cache(maxsize=1)
-def _bash_is_wsl(bash: str) -> bool:
-    """On Windows `bash` may be Git for Windows (native Windows paths work
-    as they are, mounted directly) or the WSL stub in System32 (it wants
-    Linux paths like /mnt/c/...; a path with backslashes arrives mangled and
-    the file "does not exist"). We tell them apart once by asking bash
-    itself who it is."""
-    if sys.platform != "win32":
-        return False
-    try:
-        result = subprocess.run(
-            [bash, "-c", "uname -r"],
-            capture_output=True,
-            text=True,
-            timeout=SCRIPT_TIMEOUT_SECONDS,
-            check=False,
-        )
-        return "microsoft" in result.stdout.lower()
-    except Exception:  # noqa: BLE001 - not knowing isn't fatal, assume Git Bash
-        return False
+def make_sh(tool_call: ToolCall):
+    """The `sh(command)` function exposed to templates.
 
-
-def _to_bash_path(path: Path, bash: str) -> str:
-    """Converts a Windows path into the form the resolved `bash` expects as a
-    command line argument (the WSL stub wants /mnt/<drive>/..., Git for
-    Windows accepts the native path)."""
-    if not _bash_is_wsl(bash):
-        return str(path)
-    drive, tail = os.path.splitdrive(path)
-    if not drive:
-        return str(path)
-    return f"/mnt/{drive[0].lower()}{tail.replace(chr(92), '/')}"
-
-
-def make_sh(roots: list[Path], tool_call: ToolCall):
-    """The `sh(script, *args)` function exposed to templates.
-
-    Looks the script up with the same rules as includes, runs it with bash
-    and returns its stdout (without the trailing newline, so it can be
-    interpolated inline). A non-zero exit is a render error, not a silent
-    empty string: better a prompt that doesn't start than one that lies.
+    Runs the command with `bash -c` from the session cwd and returns its
+    stdout (without the trailing newline, so it can be interpolated inline).
+    A non-zero exit is a render error, not a silent empty string: better a
+    prompt that doesn't start than one that lies.
     """
-    resolved_roots = [root.resolve() for root in roots]
 
-    def sh(script: str, *args) -> str:
-        path = resolve_in_roots(script, resolved_roots)
-        if path is None:
-            raise TemplateRenderError(
-                f"script '{script}' not found in "
-                f"{', '.join(str(root) for root in resolved_roots)}"
-            )
+    def sh(command: str) -> str:
         # On Windows bash comes from Git for Windows or from WSL; either way
-        # it is on the PATH. No shell=True: arguments stay arguments.
+        # it is on the PATH.
         bash = shutil.which("bash")
         if bash is None:
-            raise TemplateRenderError(
-                f"'{script}': bash not found on the PATH"
-            )
+            raise TemplateRenderError("bash not found on the PATH")
         try:
             result = subprocess.run(
-                [bash, _to_bash_path(path, bash), *(str(arg) for arg in args)],
+                [bash, "-c", command],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -183,11 +139,11 @@ def make_sh(roots: list[Path], tool_call: ToolCall):
             )
         except subprocess.TimeoutExpired:
             raise TemplateRenderError(
-                f"script '{script}' did not finish within {SCRIPT_TIMEOUT_SECONDS}s"
+                f"'{command}' did not finish within {SCRIPT_TIMEOUT_SECONDS}s"
             ) from None
         if result.returncode != 0:
             raise TemplateRenderError(
-                f"script '{script}' exited with code {result.returncode}: "
+                f"'{command}' exited with code {result.returncode}: "
                 f"{(result.stderr or '').strip()}"
             )
         return result.stdout.rstrip("\r\n")
@@ -247,7 +203,7 @@ def render(file_path: Path, tool_call: ToolCall) -> str:
     roots = [file_path.resolve().parent, tool_call.cwd]
     env = minijinja.Environment(loader=make_loader(roots))
     
-    env.add_function("sh", make_sh(roots, tool_call))
+    env.add_function("sh", make_sh(tool_call))
     env.add_function("eval", make_eval())
     env.add_function("exec", make_exec())
 
@@ -380,13 +336,18 @@ if __name__ == "__main__":
             raise RuntimeError("unknown protocol - where are you invoking this hook from?")
     
         logger.debug("protocol=%s", protocol)
+        
         # parse the hook event payload
         # copilot can generate an event compatible with claude code
         # when configured with the hook name "PreToolUse"
         payload = read_payload()
         tool_call : ToolCall = parse_hook_read_payload(payload)
-    
+        logger.debug("tool_call=%s", tool_call)
+        
         decision, rendered_tpl = decide(tool_call, include_regexp, exclude_regexp)
+        logger.debug("decision=%s", decision)
+        logger.debug("rendered_tpl=%s", rendered_tpl)
+        
         out = None
         if protocol == Tool.ClaudeCode:
             out = claude_output(decision, rendered_tpl)        
