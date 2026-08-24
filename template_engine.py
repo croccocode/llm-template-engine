@@ -8,6 +8,7 @@
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -37,6 +38,12 @@ class Tool(StrEnum):
 
 TEMPLATE_SUFFIXES = (".md", ".txt")
 SCRIPT_TIMEOUT_SECONDS = 30
+
+# `cat <path>` and nothing else: one argument, optionally quoted, no flags and
+# no shell metacharacters. The three groups are the quoting styles.
+CAT_COMMAND = re.compile(
+    r"""^\s*cat\s+(?:'(?P<single>[^']+)'|"(?P<double>[^"]+)"|(?P<bare>[^\s;|&<>()'"]+))\s*$"""
+)
 
 class TemplateRenderError(Exception):
     pass
@@ -269,7 +276,7 @@ def parse_hook_read_payload(payload: dict) -> ToolCall:
     # claude: .tool_name
     # copilot: .toolName
     tool_name = payload.get("tool_name") or payload.get("toolName") or ""
-    
+
     # file path is messy
     # claude: .tool_input.file_path
     # copilot (native): .toolArgs is a jsonize string, the path is in .path
@@ -277,12 +284,22 @@ def parse_hook_read_payload(payload: dict) -> ToolCall:
     file_name = (payload.get("tool_input") or {}).get("file_path") or (payload.get("tool_input") or {}).get("path") or ""
     if file_name == "":
         file_name = json.loads(payload.get("toolArgs") or "{}").get("path") or ""
-    
+
+    is_read = tool_name.lower() in ("read", "view")
+
+    # An agent can read a file with `cat` instead of the Read tool
+    # Complex invocation are left over, atm
+    if tool_name.lower() == "bash":
+        match = CAT_COMMAND.match((payload.get("tool_input") or {}).get("command") or "")
+        if match is not None:
+            is_read = True
+            file_name = match["single"] or match["double"] or match["bare"]
+
     # claude: .cwd
     # copilot: .cwd
     working_dir = payload.get("cwd", "") or ""
     return ToolCall(
-        is_read=tool_name.lower() == "read" or tool_name.lower() == "view",
+        is_read=is_read,
         file_path=file_name,
         cwd=Path(working_dir),
     )
@@ -298,23 +315,23 @@ def read_payload() -> dict:
 
 def decide(call: ToolCall) -> tuple[Decision, str | None]:
     if not call.is_read or not call.file_path:
-        logger.debug(f"tool call is not file_read, PASS call={call}")
+        logger.debug("tool call is not file_read, PASS call=%s", call)
         return Decision.PASS, None
 
     file_path = Path(call.file_path)
     if not is_template(file_path):
-        logger.debug(f"file is not a template, PASS call={call}")
+        logger.debug("file is not a template, PASS call=%s", call)
         return Decision.PASS, None
     
     if not file_path.is_absolute():
         # Copilot may pass paths relative to the session cwd.
         file_path = Path(call.cwd or Path.cwd()) / file_path
 
-    logger.debug(f"rendering template for file={file_path}")
+    logger.debug("rendering template for file=%s", file_path)
     try:
         rendered = render(file_path, call)
     except TemplateRenderError as exc:
-        logger.error(f"error parsing template, let the tool to read it error={exc}")
+        logger.error("error parsing template, let the tool to read it error=%s", exc)
         return Decision.PASS, f"Error rendering '{file_path.name}': {exc}"
 
     logger.debug("template rendered, send it to the tool")
@@ -330,6 +347,7 @@ def main():
     if protocol == Tool.UNKOWN:
         raise RuntimeError("unknown protocol - where are you invoking this hook from?")
 
+    logger.debug("protocol=%s", protocol)
     # parse the hook event payload
     # copilot can generate an event compatible with claude code
     # when configured with the hook name "PreToolUse"
@@ -350,7 +368,7 @@ def main():
 
 if __name__ == "__main__":
     logging.basicConfig(
-        filename="lltpl2.log",
+        filename="promptpl.log",
         level=logging.DEBUG,
         format="%(asctime)s %(levelname)s %(message)s",
         force=True,

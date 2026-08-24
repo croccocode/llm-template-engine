@@ -10,16 +10,15 @@ from template_engine import parse_hook_read_payload
 
 PAYLOADS = Path(__file__).resolve().parent
 
-# CWD = "/Users/totomz/Desktop/test-llm-template"
-# FILE_PATH = "/Users/totomz/Desktop/test-llm-template/prompt.md"
-
-
 @pytest.mark.parametrize(
     "filename",
     [
         "hook_pretool_input-claude-PreToolUse-claude_format.json",
         "hook_pretool_input-copilot-PreToolUse-claude_format.json",
         "hook_pretool_input-copilot-preToolUse-copilot_format.json",
+        
+        # claude in auto-mode does not use the Read tool, but Bash(cat)
+        "hook_pretool_input-claude-PreToolUse-claude_format_bash.json"
     ],
 )
 def test_parse_pretool_hook_payload(filename):

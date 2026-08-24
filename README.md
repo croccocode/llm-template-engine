@@ -33,7 +33,7 @@ By default, this engine will process each `.md` and `.txt` file as template.
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Read",
+        "matcher": "Read|Bash",
         "hooks": [
           {
             "type": "command",
@@ -61,7 +61,7 @@ For Copilot CLI, a new file `.github/hooks/render-template.json`:
     "PreToolUse": [
       {
         "type": "command",
-        "matcher": "Read",
+        "matcher": "Read|Bash",
         "bash": "uv run --script /Users/totomz/Documents/croccocode/llm-template-engine/template_engine.py",
         "timeoutSec": 60
       }
@@ -69,6 +69,11 @@ For Copilot CLI, a new file `.github/hooks/render-template.json`:
   }
 }
 ```
+Com faccio a sapere se funiziona? per chè mi ritrovo questo nel prompt!
+```
+Read prompt.md Denied by preToolUse hook: 'prompt.md' is a source template. Here is the content of the file
+```
+
 
 # Requirements
 Either NodeJS and npx or Python + uv 
