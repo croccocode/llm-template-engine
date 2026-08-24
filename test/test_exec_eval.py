@@ -10,7 +10,6 @@ from template_engine import TemplateRenderError, ToolCall, render
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "exec_eval"
 
 TOOL_CALL = ToolCall(
-    tool_name="Read",
     is_read=True,
     file_path=str(FIXTURES / "main.md"),
     cwd=FIXTURES,
