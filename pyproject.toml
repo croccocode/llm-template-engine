@@ -7,7 +7,13 @@ requires-python = "==3.14.0"
 dependencies = ["minijinja==2.22.0"]
 
 [dependency-groups]
-dev = ["pytest==8"]
+dev = [
+    "mypy>=2.3.1",
+    "pytest==9.0.3",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["test"]
+
+[tool.mypy]
+strict = true

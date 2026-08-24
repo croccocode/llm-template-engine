@@ -1,17 +1,17 @@
 # /// script
 # requires-python = "==3.14.0"
-# dependencies = ["minijinja=2.22.0"]
+# dependencies = ["minijinja==2.22.0"]
 # ///
-# ^ PEP 723: uv provides interpreter and dependencies by itself, so installing
+# ^ PEP 723: uv provides interpreter and dependencies by itself
 
 
 import json
 import logging
 import os
-import re
 import shutil
 import subprocess
 import sys
+import textwrap
 import traceback
 import minijinja
 from dataclasses import dataclass
@@ -26,13 +26,26 @@ class Decision(StrEnum):
     PARSE = "deny"
     """Parse the file as a template."""
 
+class Tool(StrEnum):
+    ClaudeCode = "claudecode"
+    CopilotCLI = "copilot_cli"
+    UNKOWN = "-"
+
 TEMPLATE_SUFFIXES = (".md", ".txt")
 SCRIPT_TIMEOUT_SECONDS = 30
-PROJECT_ROOT = None
 
 class TemplateRenderError(Exception):
     pass
 
+@dataclass(frozen=True)
+class ToolCall:
+    """Host-independent view of a PreToolUse payload: whatever the host calls
+    its keys, `decide()` only ever sees these four fields."""
+
+    tool_name: str
+    is_read: bool  # whether tool_name is one of the host's file-reading tools
+    file_path: str
+    cwd: Path
 
 def is_template(file_path: Path) -> bool:
     return bool(file_path.stem) and file_path.suffix in TEMPLATE_SUFFIXES
@@ -69,7 +82,7 @@ def make_loader(roots: list[Path]):
         source = candidate.read_text(encoding="utf-8")
         
         # Follow recursively the template as per the minijinja default behavior
-        # We check if a fle is_Template only to "activate" the template engine. 
+        # We check if a file is_template only to "activate" the template engine. 
         return source
     return loader
 
@@ -107,7 +120,7 @@ def _to_bash_path(path: Path, bash: str) -> str:
     return f"/mnt/{drive[0].lower()}{tail.replace(chr(92), '/')}"
 
 
-def make_sh(roots: list[Path]):
+def make_sh(roots: list[Path], tool_call: ToolCall):
     """The `sh(script, *args)` function exposed to templates.
 
     Looks the script up with the same rules as includes, runs it with bash
@@ -141,7 +154,7 @@ def make_sh(roots: list[Path]):
                 timeout=SCRIPT_TIMEOUT_SECONDS,
                 # fixed cwd: the same template must render identically no
                 # matter which directory the agent was launched from.
-                cwd=PROJECT_ROOT,
+                cwd=tool_call.cwd,
             )
         except subprocess.TimeoutExpired:
             raise TemplateRenderError(
@@ -157,12 +170,70 @@ def make_sh(roots: list[Path]):
     return sh
 
 
-def render(file_path: Path) -> str:
-    roots = [file_path.resolve().parent, PROJECT_ROOT]
+def make_eval():
+    """The `eval(expression)` function exposed to templates.
+
+    Evaluates a single Python expression and hands its value back to the
+    template, so `{{ eval("2 ** 10") }}` interpolates 1024.
+
+    """
+
+    def _eval(expression: str):
+        try:
+            return eval(expression, {})  # noqa: S307 - the template *is* code
+        except Exception as exc:  # noqa: BLE001 - any failure is a render failure
+            raise TemplateRenderError(f"eval({expression!r}): {exc}") from exc
+
+    return _eval
+
+
+def make_exec():
+    """The `exec(code)` function exposed to templates.
+
+    `exec` returns nothing, so the values a snippet computes would be lost.
+    The trick is to run it against a fresh namespace and return that namespace
+    as a dict: minijinja resolves attribute access on a map by key, so the
+    template gets the snippet's variables back as `ns.<name>`.
+
+        {% set ns = exec("files = sorted(...)") %}
+        {% for f in ns.files %}
+
+    Dunder entries are dropped, `__builtins__` above all: it is injected into
+    every exec namespace and is not something a template should walk.
+    """
+
+    def _exec(code: str) -> dict:
+        namespace: dict = {}
+        try:
+            # dedent: in a template the snippet is usually indented to match
+            # the surrounding markup, which on its own is an IndentationError.
+            exec(textwrap.dedent(code), namespace)  # noqa: S102
+        except Exception as exc:  # noqa: BLE001 - any failure is a render failure
+            raise TemplateRenderError(f"exec(): {exc}") from exc
+        return {
+            name: value
+            for name, value in namespace.items()
+            if not name.startswith("__")
+        }
+
+    return _exec
+
+# def _python_globals() -> dict:
+#     # commented because:
+#     # - os.chdir(PROJECT_ROOT) is a noop, the chdir is already the project dir
+#     # - {"__builtins__": __builtins__} is alredy injected by exec/eval;    
+#     os.chdir(PROJECT_ROOT)
+#     return {"__builtins__": __builtins__}
+
+
+def render(file_path: Path, tool_call: ToolCall) -> str:
+    roots = [file_path.resolve().parent, tool_call.cwd]
     env = minijinja.Environment(loader=make_loader(roots))
     
-    env.add_function("sh", make_sh(roots))
-    
+    env.add_function("sh", make_sh(roots, tool_call))
+    env.add_function("eval", make_eval())
+    env.add_function("exec", make_exec())
+
     try:
         return env.render_template(file_path.name)
     except minijinja.TemplateError as exc:
@@ -176,7 +247,7 @@ def claude_output(decision: Decision, reason: str | None) -> str:
     return json.dumps({"hookSpecificOutput": payload}, ensure_ascii=False)
 
 
-def copilot_output(decision: str, reason: str | None) -> str | None:
+def copilot_output(decision: Decision, reason: str | None) -> str | None:
     if decision == Decision.PASS:
         return None  # empty stdout = no decision, Copilot proceeds
     return json.dumps(
@@ -184,23 +255,17 @@ def copilot_output(decision: str, reason: str | None) -> str | None:
         ensure_ascii=False,
     )
 
-
-@dataclass(frozen=True)
-class ToolCall:
-    """Host-independent view of a PreToolUse payload: whatever the host calls
-    its keys, `decide()` only ever sees these four fields."""
-
-    tool_name: str
-    is_read: bool  # whether tool_name is one of the host's file-reading tools
-    file_path: str
-    cwd: str
-
-
-def sniff_protocol() -> str:
-    if "CLAUDE_PROJECT_DIR" in os.environ:
-        return "claude"
+def sniff_protocol() -> Tool:
+    # logging.debug("sniff_protocol: env list")
+    # for key, value in os.environ.items():
+    #     logging.debug("%s=%s", key, value)
     
-    return ""
+    if "CLAUDE_PROJECT_DIR" in os.environ:
+        return Tool.ClaudeCode
+    elif "COPILOT_PROJECT_DIR" in os.environ:
+        return Tool.CopilotCLI
+    
+    return Tool.UNKOWN
 
 
 def parse_claude(payload: dict) -> ToolCall:
@@ -217,6 +282,11 @@ def parse_claude(payload: dict) -> ToolCall:
 
 
 def parse_copilot(payload: dict) -> ToolCall:
+    # Copilot support 2 hook format (ottimo)
+    # Each hook event delivers a JSON payload to the hook handler. Two payload formats are supported, selected by the event name used in the hook configuration:
+    #     camelCase format — Configure the event name in camelCase (for example, sessionStart). Fields use camelCase.
+    #     VS Code compatible format — Configure the event name in PascalCase (for example, SessionStart). Fields use snake_case to match the VS Code Copilot extension format
+    
     tool_name = payload.get("toolName") or payload.get("tool_name") or ""
     # `toolArgs` is a JSON *string* in the CLI command hooks, an object in the
     # SDK; the other key names are the "VS Code compatible" payload shape.
@@ -248,6 +318,9 @@ def parse_copilot(payload: dict) -> ToolCall:
 def read_payload() -> dict:
     # utf-8-sig: some shells (PowerShell) prepend a BOM on stdin.
     raw = sys.stdin.buffer.read().decode("utf-8-sig").strip()
+    logging.debug("=== raw ===")
+    logging.debug(raw)
+    logging.debug("=== raw ===")
     return json.loads(raw) if raw else {}
 
 
@@ -267,7 +340,7 @@ def decide(call: ToolCall) -> tuple[Decision, str | None]:
 
     logging.debug(f"rendering template for file={file_path}")
     try:
-        rendered = render(file_path)
+        rendered = render(file_path, call)
     except TemplateRenderError as exc:
         logging.error(f"error parsing template, let the tool to read it error={exc}")
         return Decision.PASS, f"Error rendering '{file_path.name}': {exc}"
@@ -282,33 +355,33 @@ def decide(call: ToolCall) -> tuple[Decision, str | None]:
 def main():
     
     protocol = sniff_protocol()
-    if protocol == "":
+    if protocol == Tool.UNKOWN:
         raise RuntimeError("unknown protocol - where are you invoking this hook from?")
 
     payload = read_payload()
-    tool_call : ToolCall
-    if protocol == "claude":
-        tool_call = parse_claude(payload)        
-    elif protocol == "copilot":
-        tool_call = parse_copilot(payload)
-    else:
-        raise RuntimeError("unknown protocol, nothing to parse")
+    tool_call : ToolCall = parse_claude(payload)
+    # if protocol == Tool.ClaudeCode:
+    #     tool_call =         
+    # elif protocol == Tool.CopilotCLI:
+    #     tool_call = parse_copilot(payload)
+    # else:
+    #     raise RuntimeError("unknown protocol, nothing to parse")
 
-    # noinspection PyShadowingNames
-    # this is intended: the "root" is the root of the tool
-    PROJECT_ROOT = Path(tool_call.cwd)
-    logging.basicConfig(
-        filename=PROJECT_ROOT / "lltpl.log",
-        level=logging.DEBUG,
-        format="%(asctime)s %(levelname)s %(message)s",
-    )    
+    # not required, the working dir is the onw where the tool is started which is the
+    # project root
+    # logging.basicConfig(
+    #     filename=Path(tool_call.cwd) / "lltpl.log",
+    #     level=logging.DEBUG,
+    #     format="%(asctime)s %(levelname)s %(message)s",
+    #     force=True,
+    # )    
     logging.debug(f" detected protocol={protocol}")        
         
     decision, rendered_tpl = decide(tool_call)
     out = None
-    if protocol == "claude":
+    if protocol == Tool.ClaudeCode:
         out = claude_output(decision, rendered_tpl)        
-    elif protocol == "copilot":
+    elif protocol == Tool.CopilotCLI:
         out = copilot_output(decision, rendered_tpl)
 
     # copilot use an empty response     
@@ -317,10 +390,15 @@ def main():
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        filename="lltpl-init.log",
+        level=logging.DEBUG,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
     try:
         main()
-    except Exception as exc:  
-        print(f"render_template hook error: {exc}\n{traceback.format_exc()}", file=sys.stderr)
+    except Exception as mainexc:  
+        print(f"render_template hook error: {mainexc}\n{traceback.format_exc()}", file=sys.stderr)
         # exit 2 
         #   -> on Claude Code it blocks the Read and feeds stderr to the model,
         #      so the agent sees the error instead of the raw template

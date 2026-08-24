@@ -1,0 +1,7 @@
+{
+	"sessionId": "7cee4d66-2593-403b-87f4-1332512bec88",
+	"timestamp": 1787558118088,
+	"cwd": "/Users/totomz/Desktop/test-llm-template",
+	"toolName": "view",
+	"toolArgs": "{\"path\":\"/Users/totomz/Desktop/test-llm-template/prompt.md\"}"
+}
