@@ -1,1 +1,3 @@
 @README.md
+
+@CODING_STYLEGUIDE.md

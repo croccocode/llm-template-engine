@@ -366,10 +366,21 @@ def main():
         print(out)
 
 
+def log_level_from_args(argv: list[str]) -> int:
+    if "--debug" in argv:
+        return logging.DEBUG
+    return logging.ERROR
+
+
 if __name__ == "__main__":
+    log_level = logging.ERROR
+    
+    if "--debug" in sys.argv[1:]:
+        log_level = logging.DEBUG
+        
     logging.basicConfig(
         filename="promptpl.log",
-        level=logging.DEBUG,
+        level=log_level,
         format="%(asctime)s %(levelname)s %(message)s",
         force=True,
     )

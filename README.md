@@ -69,11 +69,17 @@ For Copilot CLI, a new file `.github/hooks/render-template.json`:
   }
 }
 ```
+
+## Dbug and troubleshooting
 Com faccio a sapere se funiziona? per chè mi ritrovo questo nel prompt!
 ```
 Read prompt.md Denied by preToolUse hook: 'prompt.md' is a source template. Here is the content of the file
 ```
 
+To enable the debug log, add the `--debug` flag to the tool:
+```
+"bash": "uv run --script /Users/totomz/Documents/croccocode/llm-template-engine/template_engine.py --debug",
+```
 
 # Requirements
 Either NodeJS and npx or Python + uv 
