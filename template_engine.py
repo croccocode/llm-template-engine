@@ -13,11 +13,15 @@ import subprocess
 import sys
 import textwrap
 import traceback
-import minijinja
 from dataclasses import dataclass
+from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
-from enum import StrEnum
+
+import minijinja
+
+logger = logging.getLogger("lltpl")
+
 
 class Decision(StrEnum):
     PASS = "allow"
@@ -98,6 +102,7 @@ def _bash_is_wsl(bash: str) -> bool:
             capture_output=True,
             text=True,
             timeout=SCRIPT_TIMEOUT_SECONDS,
+            check=False,
         )
         return "microsoft" in result.stdout.lower()
     except Exception:  # noqa: BLE001 - not knowing isn't fatal, assume Git Bash
@@ -151,6 +156,8 @@ def make_sh(roots: list[Path], tool_call: ToolCall):
                 # fixed cwd: the same template must render identically no
                 # matter which directory the agent was launched from.
                 cwd=tool_call.cwd,
+                # the return code is inspected below, to report it verbatim
+                check=False,
             )
         except subprocess.TimeoutExpired:
             raise TemplateRenderError(
@@ -176,8 +183,8 @@ def make_eval():
 
     def _eval(expression: str):
         try:
-            return eval(expression, {})  # noqa: S307 - the template *is* code
-        except Exception as exc:  # noqa: BLE001 - any failure is a render failure
+            return eval(expression, {})  # the template *is* code
+        except Exception as exc:  # any failure is a render failure
             raise TemplateRenderError(f"eval({expression!r}): {exc}") from exc
 
     return _eval
@@ -204,7 +211,7 @@ def make_exec():
             # dedent: in a template the snippet is usually indented to match
             # the surrounding markup, which on its own is an IndentationError.
             exec(textwrap.dedent(code), namespace)  # noqa: S102
-        except Exception as exc:  # noqa: BLE001 - any failure is a render failure
+        except Exception as exc:  # any failure is a render failure
             raise TemplateRenderError(f"exec(): {exc}") from exc
         return {
             name: value
@@ -213,14 +220,6 @@ def make_exec():
         }
 
     return _exec
-
-# def _python_globals() -> dict:
-#     # commented because:
-#     # - os.chdir(PROJECT_ROOT) is a noop, the chdir is already the project dir
-#     # - {"__builtins__": __builtins__} is alredy injected by exec/eval;    
-#     os.chdir(PROJECT_ROOT)
-#     return {"__builtins__": __builtins__}
-
 
 def render(file_path: Path, tool_call: ToolCall) -> str:
     roots = [file_path.resolve().parent, tool_call.cwd]
@@ -252,9 +251,9 @@ def copilot_output(decision: Decision, reason: str | None) -> str | None:
     )
 
 def sniff_protocol() -> Tool:
-    # logging.debug("sniff_protocol: env list")
+    # logger.debug("sniff_protocol: env list")
     # for key, value in os.environ.items():
-    #     logging.debug("%s=%s", key, value)
+    #     logger.debug("%s=%s", key, value)
     
     if "CLAUDE_PROJECT_DIR" in os.environ:
         return Tool.ClaudeCode
@@ -281,7 +280,7 @@ def parse_hook_read_payload(payload: dict) -> ToolCall:
     
     # claude: .cwd
     # copilot: .cwd
-    working_dir = payload.get("cwd", "")
+    working_dir = payload.get("cwd", "") or ""
     return ToolCall(
         is_read=tool_name.lower() == "read" or tool_name.lower() == "view",
         file_path=file_name,
@@ -291,34 +290,34 @@ def parse_hook_read_payload(payload: dict) -> ToolCall:
 def read_payload() -> dict:
     # utf-8-sig: some shells (PowerShell) prepend a BOM on stdin.
     raw = sys.stdin.buffer.read().decode("utf-8-sig").strip()
-    logging.debug("=== raw ===")
-    logging.debug(raw)
-    logging.debug("=== raw ===")
+    logger.debug("=== raw ===")
+    logger.debug(raw)
+    logger.debug("=== raw ===")
     return json.loads(raw) if raw else {}
 
 
 def decide(call: ToolCall) -> tuple[Decision, str | None]:
     if not call.is_read or not call.file_path:
-        logging.debug(f"tool call is not file_read, PASS call={call}")
+        logger.debug(f"tool call is not file_read, PASS call={call}")
         return Decision.PASS, None
 
     file_path = Path(call.file_path)
     if not is_template(file_path):
-        logging.debug(f"file is not a template, PASS call={call}")
+        logger.debug(f"file is not a template, PASS call={call}")
         return Decision.PASS, None
     
     if not file_path.is_absolute():
         # Copilot may pass paths relative to the session cwd.
         file_path = Path(call.cwd or Path.cwd()) / file_path
 
-    logging.debug(f"rendering template for file={file_path}")
+    logger.debug(f"rendering template for file={file_path}")
     try:
         rendered = render(file_path, call)
     except TemplateRenderError as exc:
-        logging.error(f"error parsing template, let the tool to read it error={exc}")
+        logger.error(f"error parsing template, let the tool to read it error={exc}")
         return Decision.PASS, f"Error rendering '{file_path.name}': {exc}"
 
-    logging.debug(f"template rendered, send it to the tool")
+    logger.debug("template rendered, send it to the tool")
     return Decision.PARSE, (
         f"'{file_path.name}' is a source template. "
         f"Here is the content of the file: {rendered}"
@@ -337,17 +336,6 @@ def main():
     payload = read_payload()
     tool_call : ToolCall = parse_hook_read_payload(payload)
 
-
-    # not required, the working dir is the onw where the tool is started which is the
-    # project root
-    # logging.basicConfig(
-    #     filename=Path(tool_call.cwd) / "lltpl.log",
-    #     level=logging.DEBUG,
-    #     format="%(asctime)s %(levelname)s %(message)s",
-    #     force=True,
-    # )    
-    logging.debug(f" detected protocol={protocol}")        
-        
     decision, rendered_tpl = decide(tool_call)
     out = None
     if protocol == Tool.ClaudeCode:
@@ -362,13 +350,14 @@ def main():
 
 if __name__ == "__main__":
     logging.basicConfig(
-        filename="lltpl-init.log",
+        filename="lltpl2.log",
         level=logging.DEBUG,
         format="%(asctime)s %(levelname)s %(message)s",
+        force=True,
     )
     try:
         main()
-    except Exception as mainexc:  
+    except Exception as mainexc:  # noqa: BLE001 - the hook must report *any* failure  
         print(f"render_template hook error: {mainexc}\n{traceback.format_exc()}", file=sys.stderr)
         # exit 2 
         #   -> on Claude Code it blocks the Read and feeds stderr to the model,

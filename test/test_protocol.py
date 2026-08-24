@@ -1,11 +1,12 @@
 import json
 import sys
 from pathlib import Path
+
 import pytest
-from template_engine import parse_hook_read_payload
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from template_engine import parse_hook_read_payload
 
 PAYLOADS = Path(__file__).resolve().parent
 
