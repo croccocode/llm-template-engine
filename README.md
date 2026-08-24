@@ -75,3 +75,8 @@ Either NodeJS and npx or Python + uv
 Overhead is ~100 ms per call, all of it Node and WASM startup. 
 There is nothing to provision on first run, so no cache to warm up beforehand.
 
+# Developer
+## Run tests and linter
+```shell
+/.shMakefile test
+```

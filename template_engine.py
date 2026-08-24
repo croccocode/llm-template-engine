@@ -39,10 +39,6 @@ class TemplateRenderError(Exception):
 
 @dataclass(frozen=True)
 class ToolCall:
-    """Host-independent view of a PreToolUse payload: whatever the host calls
-    its keys, `decide()` only ever sees these four fields."""
-
-    tool_name: str
     is_read: bool  # whether tool_name is one of the host's file-reading tools
     file_path: str
     cwd: Path
@@ -268,52 +264,29 @@ def sniff_protocol() -> Tool:
     return Tool.UNKOWN
 
 
-def parse_claude(payload: dict) -> ToolCall:
-    tool_name = payload.get("tool_name") or ""
-    args = payload.get("tool_input")
-    if not isinstance(args, dict):
-        args = {}
-    return ToolCall(
-        tool_name=tool_name,
-        is_read=tool_name.lower() == "read",
-        file_path=args.get("file_path"),
-        cwd=payload.get("cwd"),
-    )
-
-
-def parse_copilot(payload: dict) -> ToolCall:
-    # Copilot support 2 hook format (ottimo)
-    # Each hook event delivers a JSON payload to the hook handler. Two payload formats are supported, selected by the event name used in the hook configuration:
-    #     camelCase format — Configure the event name in camelCase (for example, sessionStart). Fields use camelCase.
-    #     VS Code compatible format — Configure the event name in PascalCase (for example, SessionStart). Fields use snake_case to match the VS Code Copilot extension format
+def parse_hook_read_payload(payload: dict) -> ToolCall:
+    # handle both Copilot format and Claude Code format
     
-    tool_name = payload.get("toolName") or payload.get("tool_name") or ""
-    # `toolArgs` is a JSON *string* in the CLI command hooks, an object in the
-    # SDK; the other key names are the "VS Code compatible" payload shape.
-    args = payload.get("toolArgs") or payload.get("tool_input") or payload.get("tool_args")
-    if isinstance(args, str):
-        try:
-            args = json.loads(args)
-        except json.JSONDecodeError:
-            args = {}
-    if not isinstance(args, dict):
-        args = {}
-    # `view` is the native reading tool and `path` its native argument; the
-    # other names are defensive aliases across Copilot's payload shapes.
+    # claude: .tool_name
+    # copilot: .toolName
+    tool_name = payload.get("tool_name") or payload.get("toolName") or ""
+    
+    # file path is messy
+    # claude: .tool_input.file_path
+    # copilot (native): .toolArgs is a jsonize string, the path is in .path
+    # copilot (claude format): .tool_input.path
+    file_name = (payload.get("tool_input") or {}).get("file_path") or (payload.get("tool_input") or {}).get("path") or ""
+    if file_name == "":
+        file_name = json.loads(payload.get("toolArgs") or "{}").get("path") or ""
+    
+    # claude: .cwd
+    # copilot: .cwd
+    working_dir = payload.get("cwd", "")
     return ToolCall(
-        tool_name=tool_name,
-        is_read=tool_name.lower() in {"view", "read", "read_file", "str_replace_editor"},
-        file_path=next(
-            (
-                args[key]
-                for key in ("path", "file_path", "filePath", "absolute_path")
-                if args.get(key)
-            ),
-            None,
-        ),
-        cwd=payload.get("cwd"),
+        is_read=tool_name.lower() == "read" or tool_name.lower() == "view",
+        file_path=file_name,
+        cwd=Path(working_dir),
     )
-
 
 def read_payload() -> dict:
     # utf-8-sig: some shells (PowerShell) prepend a BOM on stdin.
@@ -358,14 +331,12 @@ def main():
     if protocol == Tool.UNKOWN:
         raise RuntimeError("unknown protocol - where are you invoking this hook from?")
 
+    # parse the hook event payload
+    # copilot can generate an event compatible with claude code
+    # when configured with the hook name "PreToolUse"
     payload = read_payload()
-    tool_call : ToolCall = parse_claude(payload)
-    # if protocol == Tool.ClaudeCode:
-    #     tool_call =         
-    # elif protocol == Tool.CopilotCLI:
-    #     tool_call = parse_copilot(payload)
-    # else:
-    #     raise RuntimeError("unknown protocol, nothing to parse")
+    tool_call : ToolCall = parse_hook_read_payload(payload)
+
 
     # not required, the working dir is the onw where the tool is started which is the
     # project root
