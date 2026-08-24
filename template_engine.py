@@ -36,7 +36,6 @@ class Tool(StrEnum):
     CopilotCLI = "copilot_cli"
     UNKOWN = "-"
 
-TEMPLATE_SUFFIXES = (".md", ".txt")
 SCRIPT_TIMEOUT_SECONDS = 30
 
 # `cat <path>` and nothing else: one argument, optionally quoted, no flags and
@@ -54,8 +53,24 @@ class ToolCall:
     file_path: str
     cwd: Path
 
-def is_template(file_path: Path) -> bool:
-    return bool(file_path.stem) and file_path.suffix in TEMPLATE_SUFFIXES
+
+def flag_regex(argv: list[str], flag: str) -> re.Pattern[str] | None:
+    values = [arg.removeprefix(flag) for arg in argv if arg.startswith(flag)]
+    if not values:
+        return None
+    return re.compile("|".join(values))
+
+
+def is_template(file_path: Path, include: re.Pattern[str] | None, exclude: re.Pattern[str] | None) -> bool:
+    if exclude is not None and exclude.search(file_path.name):
+        return False
+    if include is not None:
+        return include.search(file_path.name) is not None
+    
+    # bool(file_path.stem) -> returns the file name without extension
+    # this  handle weirdo case like ".md"
+    # this is clearly a mental masturbation from Claude Code, but why not.
+    return bool(file_path.stem) and file_path.suffix in (".md", ".txt")
 
 
 def resolve_in_roots(name: str, roots: list[Path]) -> Path | None:
@@ -313,13 +328,13 @@ def read_payload() -> dict:
     return json.loads(raw) if raw else {}
 
 
-def decide(call: ToolCall) -> tuple[Decision, str | None]:
+def decide(call: ToolCall, include: re.Pattern[str] | None, exclude: re.Pattern[str] | None) -> tuple[Decision, str | None]:
     if not call.is_read or not call.file_path:
         logger.debug("tool call is not file_read, PASS call=%s", call)
         return Decision.PASS, None
 
     file_path = Path(call.file_path)
-    if not is_template(file_path):
+    if not is_template(file_path, include, exclude):
         logger.debug("file is not a template, PASS call=%s", call)
         return Decision.PASS, None
     
@@ -341,40 +356,10 @@ def decide(call: ToolCall) -> tuple[Decision, str | None]:
     )
 
 
-def main():
-    
-    protocol = sniff_protocol()
-    if protocol == Tool.UNKOWN:
-        raise RuntimeError("unknown protocol - where are you invoking this hook from?")
-
-    logger.debug("protocol=%s", protocol)
-    # parse the hook event payload
-    # copilot can generate an event compatible with claude code
-    # when configured with the hook name "PreToolUse"
-    payload = read_payload()
-    tool_call : ToolCall = parse_hook_read_payload(payload)
-
-    decision, rendered_tpl = decide(tool_call)
-    out = None
-    if protocol == Tool.ClaudeCode:
-        out = claude_output(decision, rendered_tpl)        
-    elif protocol == Tool.CopilotCLI:
-        out = copilot_output(decision, rendered_tpl)
-
-    # copilot use an empty response     
-    if out is not None:
-        print(out)
-
-
-def log_level_from_args(argv: list[str]) -> int:
-    if "--debug" in argv:
-        return logging.DEBUG
-    return logging.ERROR
-
-
 if __name__ == "__main__":
-    log_level = logging.ERROR
     
+    # debug logging
+    log_level = logging.ERROR    
     if "--debug" in sys.argv[1:]:
         log_level = logging.DEBUG
         
@@ -384,8 +369,34 @@ if __name__ == "__main__":
         format="%(asctime)s %(levelname)s %(message)s",
         force=True,
     )
+
     try:
-        main()
+        args = sys.argv[1:]
+        include_regexp = flag_regex(args, "--include=")
+        exclude_regexp = flag_regex(args, "--exclude=")
+        
+        protocol = sniff_protocol()
+        if protocol == Tool.UNKOWN:
+            raise RuntimeError("unknown protocol - where are you invoking this hook from?")
+    
+        logger.debug("protocol=%s", protocol)
+        # parse the hook event payload
+        # copilot can generate an event compatible with claude code
+        # when configured with the hook name "PreToolUse"
+        payload = read_payload()
+        tool_call : ToolCall = parse_hook_read_payload(payload)
+    
+        decision, rendered_tpl = decide(tool_call, include_regexp, exclude_regexp)
+        out = None
+        if protocol == Tool.ClaudeCode:
+            out = claude_output(decision, rendered_tpl)        
+        elif protocol == Tool.CopilotCLI:
+            out = copilot_output(decision, rendered_tpl)
+    
+        # copilot use an empty response     
+        if out is not None:
+            print(out)
+        
     except Exception as mainexc:  # noqa: BLE001 - the hook must report *any* failure  
         print(f"render_template hook error: {mainexc}\n{traceback.format_exc()}", file=sys.stderr)
         # exit 2 

@@ -1,30 +1,44 @@
 # llm-template-engine
 
-## TODO
-- [] render only .md and .txt
-- [] add an `--include=<regexp>` param that threat only the filename that match the regexp as template (override the default, allow multiple values) 
-- [] add an `--exclude=<regexp>` param that threat only the filename that match the regexp as template (oonly file that do not match the regexp are threated as template) 
-- [] verifica che tutti i path sono sempre relativi alla project folder (da dove hai lanciato claude)
+A ClaudeCode/Copilot hook that render templated prompt files on the fly using [MiniJinja](https://github.com/mitsuhiko/minijinja).
 
-A template engine for LLM prompts base on MiniJinja template engine.
-
-It allows you to merge prompts from different file together, or inject the output of shell scipts and ommands driectly 
-in the prompt before are evaualted by your LLM engine di fiducia.
-
-# Why
-Evey tool call burn tokens. Something lik
+Evey tool call burn tokens. Often prompts include references to other files and instructions that could few months ago
+would have been just few lines of code:
 
 ```prompt
-Read the other prompt ../another/file.md and for each *.son file in this folder, do blabla 
+Read the instruction at ../another/file.md 
+and perform those instruction on any *.json file in the folder ./zoo  
 ```
-This will cost at least 4 LLM api call an 250k tokens
+
+This simple prompt will cost 3 Tool API call and probably 4 API Call (input token, output token)
+This code allows you to reqrite the template as follows:
+```jinja
+# Instructions
+{% include ../another/file.md %}
+
+For each of this file
+{% set ns = exec("
+from pathlib import Path
+files = sorted(p.name for p in Path('./files').iterdir() if p.is_file())
+") %}
+
+{% for f in ns.files %}
+- {{ f }}
+{% endfor %}
+
+```
+
 
 # How does it work
 Add a `preToolUse` hook intercepts every read of a `.tpl.md` file, expands it with **MiniJinja** (includes resolved first in the file's own directory, then in the project root; `sh("…")` to interpolate the output of a bash script) and returns the already-rendered content directly in the `deny` message, without writing compiled files to disk.
 
 The same engine runs on two agents: **Claude Code** and **GitHub Copilot CLI**. A single hook serves both: the protocol changes, not the logic.
 
-By default, this engine will process each `.md` and `.txt` file as template.
+By default every `.md` and `.txt` file is a template. Two optional flags change the selection,
+both matched against the file name only, both repeatable:
+
+- `--include=<regexp>`: only names matching the regexp are templates (replaces the default suffix rule);
+- `--exclude=<regexp>`: names matching the regexp are never templates (wins over `--include`).
 
 
 ## Claude Code
