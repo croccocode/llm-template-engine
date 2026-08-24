@@ -5,6 +5,7 @@
 # ^ PEP 723: uv provides interpreter and dependencies by itself
 
 
+import hashlib
 import json
 import logging
 import os
@@ -12,9 +13,10 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
@@ -22,13 +24,6 @@ import minijinja
 
 logger = logging.getLogger("lltpl")
 
-
-class Decision(StrEnum):
-    PASS = "allow"
-    """Reads the file normally."""
-    
-    PARSE = "deny"
-    """Parse the file as a template."""
 
 class Tool(StrEnum):
     ClaudeCode = "claudecode"
@@ -43,6 +38,13 @@ CAT_COMMAND = re.compile(
     r"""^\s*cat\s+(?:'(?P<single>[^']+)'|"(?P<double>[^"]+)"|(?P<bare>[^\s;|&<>()'"]+))\s*$"""
 )
 
+# What separates two commands in a chain. `|` and `>` are not here on purpose:
+# a `cat` inside a pipeline or a redirection feeds something else, and swapping
+# its argument would change what that something else receives. The group is
+# capturing so that re.split keeps the separators and the command can be
+# rebuilt as it was.
+COMMAND_SEPARATOR = re.compile(r"(&&|\|\||;|\n)")
+
 class TemplateRenderError(Exception):
     pass
 
@@ -51,6 +53,8 @@ class ToolCall:
     is_read: bool  # whether tool_name is one of the host's file-reading tools
     file_path: str
     cwd: Path
+    tool_args: dict = field(default_factory=dict)  # the host's original tool input
+    path_key: str = ""  # which key of tool_args carries what the agent reads
 
 
 def flag_regex(argv: list[str], flag: str) -> re.Pattern[str] | None:
@@ -213,20 +217,46 @@ def render(file_path: Path, tool_call: ToolCall) -> str:
         raise TemplateRenderError(str(exc)) from exc
 
 
-def claude_output(decision: Decision, reason: str | None) -> str:
-    payload = {"hookEventName": "PreToolUse", "permissionDecision": decision}
+def write_rendered(file_path: Path, rendered: str) -> Path:
+    """Parks the rendered template in a scratch file, the one the agent is then
+    pointed at. The name is derived from the source path, so a template always
+    lands on the same file instead of littering the temp dir, and it never ends
+    in a template suffix, or reading it would trigger this very hook again."""
+    digest = hashlib.sha256(str(file_path).encode("utf-8")).hexdigest()[:12]
+    out_dir = Path(tempfile.gettempdir()) / "llm-template-engine"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    out_path = out_dir / f"{file_path.name}.{digest}.rendered"
+    out_path.write_text(rendered, encoding="utf-8")
+    return out_path
+
+
+def rewrite_cat_command(command: str, rendered_path: Path) -> str:
+    parts = COMMAND_SEPARATOR.split(command)
+    for index, part in enumerate(parts):
+        if CAT_COMMAND.match(part) is None:
+            continue
+        parts[index] = f' cat "{rendered_path}" '
+        break
+    return "".join(parts)
+
+
+def claude_output(reason: str | None, updated_args: dict | None) -> str:
+    payload = {"hookEventName": "PreToolUse", "permissionDecision": "allow"}
     if reason is not None:
         payload["permissionDecisionReason"] = reason
+    if updated_args is not None:
+        payload["updatedInput"] = updated_args
     return json.dumps({"hookSpecificOutput": payload}, ensure_ascii=False)
 
 
-def copilot_output(decision: Decision, reason: str | None) -> str | None:
-    if decision == Decision.PASS:
-        return None  # empty stdout = no decision, Copilot proceeds
-    return json.dumps(
-        {"permissionDecision": decision, "permissionDecisionReason": reason},
-        ensure_ascii=False,
-    )
+def copilot_output(reason: str | None, updated_args: dict | None) -> str:
+    payload = {"permissionDecision": "allow"}
+    if reason is not None:
+        payload["permissionDecisionReason"] = reason
+    if updated_args is not None:
+        payload["modifiedArgs"] = updated_args
+    return json.dumps(payload, ensure_ascii=False)
 
 def sniff_protocol() -> Tool:
     # logger.debug("sniff_protocol: env list")
@@ -248,31 +278,58 @@ def parse_hook_read_payload(payload: dict) -> ToolCall:
     # copilot: .toolName
     tool_name = payload.get("tool_name") or payload.get("toolName") or ""
 
+    # the arguments of the call, to be given back rewritten
+    # claude: .tool_input
+    # copilot (native): .toolArgs is a jsonized string
+    tool_args = payload.get("tool_input") or json.loads(payload.get("toolArgs") or "{}")
+
     # file path is messy
     # claude: .tool_input.file_path
     # copilot (native): .toolArgs is a jsonize string, the path is in .path
     # copilot (claude format): .tool_input.path
-    file_name = (payload.get("tool_input") or {}).get("file_path") or (payload.get("tool_input") or {}).get("path") or ""
-    if file_name == "":
-        file_name = json.loads(payload.get("toolArgs") or "{}").get("path") or ""
+    path_key = ""
+    file_name = ""
+    for key in ("file_path", "path"):
+        if tool_args.get(key):
+            path_key = key
+            file_name = tool_args[key]
+            break
 
     is_read = tool_name.lower() in ("read", "view")
-
-    # An agent can read a file with `cat` instead of the Read tool
-    # Complex invocation are left over, atm
-    if tool_name.lower() == "bash":
-        match = CAT_COMMAND.match((payload.get("tool_input") or {}).get("command") or "")
-        if match is not None:
-            is_read = True
-            file_name = match["single"] or match["double"] or match["bare"]
 
     # claude: .cwd
     # copilot: .cwd
     working_dir = payload.get("cwd", "") or ""
+
+    # An agent can read a file with `cat` instead of the Read tool, on its own
+    # or chained with other commands. Only the first cat of the chain is
+    # handled: one call reads one template.
+    if tool_name.lower() == "bash":
+        command = tool_args.get("command") or ""
+        for segment in COMMAND_SEPARATOR.split(command):
+            match = CAT_COMMAND.match(segment)
+            if match is None:
+                continue
+            is_read = True
+            path_key = "command"
+            file_name = match["single"] or match["double"] or match["bare"]
+            logger.error(
+                "bash command '%s' reads the file '%s' with cat: that cat will "
+                "be pointed at the rendered template",
+                command,
+                file_name,
+            )
+            break
+
+    if file_name and not Path(file_name).is_absolute():
+        file_name = str(Path(working_dir) / file_name)
+
     return ToolCall(
         is_read=is_read,
         file_path=file_name,
         cwd=Path(working_dir),
+        tool_args=tool_args,
+        path_key=path_key,
     )
 
 def read_payload() -> dict:
@@ -284,16 +341,16 @@ def read_payload() -> dict:
     return json.loads(raw) if raw else {}
 
 
-def decide(call: ToolCall, include: re.Pattern[str] | None, exclude: re.Pattern[str] | None) -> tuple[Decision, str | None]:
+def decide(call: ToolCall, include: re.Pattern[str] | None, exclude: re.Pattern[str] | None) -> tuple[str | None, dict | None]:
     if not call.is_read or not call.file_path:
         logger.debug("tool call is not file_read, PASS call=%s", call)
-        return Decision.PASS, None
+        return None, None
 
     file_path = Path(call.file_path)
     if not is_template(file_path, include, exclude):
         logger.debug("file is not a template, PASS call=%s", call)
-        return Decision.PASS, None
-    
+        return None, None
+
     if not file_path.is_absolute():
         # Copilot may pass paths relative to the session cwd.
         file_path = Path(call.cwd or Path.cwd()) / file_path
@@ -303,13 +360,22 @@ def decide(call: ToolCall, include: re.Pattern[str] | None, exclude: re.Pattern[
         rendered = render(file_path, call)
     except TemplateRenderError as exc:
         logger.error("error parsing template, let the tool to read it error=%s", exc)
-        return Decision.PASS, f"Error rendering '{file_path.name}': {exc}"
+        return f"Error rendering '{file_path.name}': {exc}", None
 
-    logger.debug("template rendered, send it to the tool")
-    return Decision.PARSE, (
-        f"'{file_path.name}' is a source template. "
-        f"Here is the content of the file: {rendered}"
-    )
+    rendered_path = write_rendered(file_path, rendered)
+    logger.debug("template rendered in file=%s", rendered_path)
+
+    updated_args = dict(call.tool_args)
+    if call.path_key == "command":
+        updated_args["command"] = rewrite_cat_command(updated_args["command"], rendered_path)
+    else:
+        updated_args[call.path_key] = str(rendered_path)
+
+    return (
+        f"[llm-template-engine] '{file_path.name}' is a MiniJinja template: "
+        f"the call reads its rendered version in '{rendered_path}' instead. "
+        f"This is the project's own template engine at work, not an error."
+    ), updated_args
 
 
 if __name__ == "__main__":
@@ -344,19 +410,17 @@ if __name__ == "__main__":
         tool_call : ToolCall = parse_hook_read_payload(payload)
         logger.debug("tool_call=%s", tool_call)
         
-        decision, rendered_tpl = decide(tool_call, include_regexp, exclude_regexp)
-        logger.debug("decision=%s", decision)
-        logger.debug("rendered_tpl=%s", rendered_tpl)
-        
-        out = None
-        if protocol == Tool.ClaudeCode:
-            out = claude_output(decision, rendered_tpl)        
-        elif protocol == Tool.CopilotCLI:
-            out = copilot_output(decision, rendered_tpl)
-    
-        # copilot use an empty response     
-        if out is not None:
-            print(out)
+        reason, updated_args = decide(tool_call, include_regexp, exclude_regexp)
+        logger.debug("reason=%s", reason)
+        logger.debug("updated_args=%s", updated_args)
+
+        # empty stdout = no decision: with nothing to say about this call the
+        # hook must stay silent, not approve it on the user's behalf
+        if reason is not None or updated_args is not None:
+            if protocol == Tool.ClaudeCode:
+                print(claude_output(reason, updated_args))
+            elif protocol == Tool.CopilotCLI:
+                print(copilot_output(reason, updated_args))
         
     except Exception as mainexc:  # noqa: BLE001 - the hook must report *any* failure  
         print(f"render_template hook error: {mainexc}\n{traceback.format_exc()}", file=sys.stderr)
