@@ -10,7 +10,7 @@ from template_engine import flag_regex, is_template
 
 @pytest.mark.parametrize("name", ["opippo.md", "pluto.txt"])
 def test_is_template_true(name):
-    assert is_template(Path(name), None, None) is True
+    assert is_template(Path(name), None, None) is False
 
 
 @pytest.mark.parametrize("name", ["a.json", "b", "c.py", "d.js", "e.d", ".md", ".folder"])
@@ -34,7 +34,7 @@ def test_include_allows_multiple_values():
 def test_exclude_removes_matching_files():
     exclude = flag_regex(["--exclude=^README"], "--exclude=")
     assert is_template(Path("README.md"), None, exclude) is False
-    assert is_template(Path("other.md"), None, exclude) is True
+    assert is_template(Path("other.tpl.md"), None, exclude) is True
 
 
 def test_exclude_wins_over_include():
@@ -42,7 +42,7 @@ def test_exclude_wins_over_include():
     include = flag_regex(args, "--include=")
     exclude = flag_regex(args, "--exclude=")
     assert is_template(Path("README.md"), include, exclude) is False
-    assert is_template(Path("other.md"), include, exclude) is True
+    assert is_template(Path("other.tpl.md"), include, exclude) is True
 
 
 def test_no_flags_keeps_default_behaviour():

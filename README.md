@@ -1,4 +1,5 @@
 # llm-template-engine
+⚠️ Warning: templates are code — sh(), eval() and exec() run with your privileges. By default every .md/.txt read is rendered: reading untrusted files (cloned repos, downloads) executes their content. Narrow the selection with --include.
 
 A ClaudeCode/Copilot hook that render templated prompt files on the fly using [MiniJinja](https://github.com/mitsuhiko/minijinja).
 

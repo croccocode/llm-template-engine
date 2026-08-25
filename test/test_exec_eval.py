@@ -11,7 +11,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "exec_eval"
 
 TOOL_CALL = ToolCall(
     is_read=True,
-    file_path=str(FIXTURES / "main.md"),
+    file_path=FIXTURES / "main.md",
     cwd=FIXTURES,
 )
 

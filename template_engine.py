@@ -30,7 +30,11 @@ class Tool(StrEnum):
     CopilotCLI = "copilot_cli"
     UNKOWN = "-"
 
-SCRIPT_TIMEOUT_SECONDS = 30
+RENDERED_SUFFIX = ".rendered"
+
+# The following regexp are used to extract the file the tool is trying to read when 
+# using bash command (`cat`, and `cat` in a sequence of bash command)
+# Claude Code in auto-mode uses mainly Bash(cat) instead of Read 
 
 # `cat <path>` and nothing else: one argument, optionally quoted, no flags and
 # no shell metacharacters. The three groups are the quoting styles.
@@ -38,11 +42,16 @@ CAT_COMMAND = re.compile(
     r"""^\s*cat\s+(?:'(?P<single>[^']+)'|"(?P<double>[^"]+)"|(?P<bare>[^\s;|&<>()'"]+))\s*$"""
 )
 
-# What separates two commands in a chain. `|` and `>` are not here on purpose:
-# a `cat` inside a pipeline or a redirection feeds something else, and swapping
-# its argument would change what that something else receives. The group is
-# capturing so that re.split keeps the separators and the command can be
+# A command that moves the shell's cwd: any cat after it resolves against a
+# directory this hook cannot know, so the whole chain is left untouched.
+CWD_CHANGING_COMMAND = re.compile(r"\s*(cd|pushd)\b")
+
+# What separates two commands in a chain. 
+# The group is capturing so that re.split keeps the separators and the command can be
 # rebuilt as it was.
+# - ignore `|` and `>`:
+#   a `cat` inside a pipeline or a redirection feeds something else, and swapping
+#   its argument would change what that something else receives. 
 COMMAND_SEPARATOR = re.compile(r"(&&|\|\||;|\n)")
 
 class TemplateRenderError(Exception):
@@ -51,7 +60,7 @@ class TemplateRenderError(Exception):
 @dataclass(frozen=True)
 class ToolCall:
     is_read: bool  # whether tool_name is one of the host's file-reading tools
-    file_path: str
+    file_path: Path | None
     cwd: Path
     tool_args: dict = field(default_factory=dict)  # the host's original tool input
     path_key: str = ""  # which key of tool_args carries what the agent reads
@@ -65,15 +74,17 @@ def flag_regex(argv: list[str], flag: str) -> re.Pattern[str] | None:
 
 
 def is_template(file_path: Path, include: re.Pattern[str] | None, exclude: re.Pattern[str] | None) -> bool:
+    if file_path.name.endswith(RENDERED_SUFFIX):
+        return False
     if exclude is not None and exclude.search(file_path.name):
         return False
     if include is not None:
         return include.search(file_path.name) is not None
     
-    # bool(file_path.stem) -> returns the file name without extension
-    # this  handle weirdo case like ".md"
-    # this is clearly a mental masturbation from Claude Code, but why not.
-    return bool(file_path.stem) and file_path.suffix in (".md", ".txt")
+    # Path.suffix only returns the last extension (".md" for "a.tpl.md"), so the
+    # double extension must be matched on the whole name.
+    # The `!= s` check discards bare names like ".tpl.md", with no actual stem.
+    return any(file_path.name.endswith(s) and file_path.name != s for s in (".tpl.md", ".tpl.txt"))
 
 
 def resolve_in_roots(name: str, roots: list[Path]) -> Path | None:
@@ -134,16 +145,14 @@ def make_sh(tool_call: ToolCall):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=SCRIPT_TIMEOUT_SECONDS,
-                # fixed cwd: the same template must render identically no
-                # matter which directory the agent was launched from.
+                timeout=30,
                 cwd=tool_call.cwd,
                 # the return code is inspected below, to report it verbatim
                 check=False,
             )
         except subprocess.TimeoutExpired:
             raise TemplateRenderError(
-                f"'{command}' did not finish within {SCRIPT_TIMEOUT_SECONDS}s"
+                f"'{command}' did not finish within {30}s"
             ) from None
         if result.returncode != 0:
             raise TemplateRenderError(
@@ -217,18 +226,14 @@ def render(file_path: Path, tool_call: ToolCall) -> str:
         raise TemplateRenderError(str(exc)) from exc
 
 
-def write_rendered(file_path: Path, rendered: str) -> Path:
-    """Parks the rendered template in a scratch file, the one the agent is then
-    pointed at. The name is derived from the source path, so a template always
-    lands on the same file instead of littering the temp dir, and it never ends
-    in a template suffix, or reading it would trigger this very hook again."""
-    digest = hashlib.sha256(str(file_path).encode("utf-8")).hexdigest()[:12]
-    out_dir = Path(tempfile.gettempdir()) / "llm-template-engine"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    out_path = out_dir / f"{file_path.name}.{digest}.rendered"
-    out_path.write_text(rendered, encoding="utf-8")
-    return out_path
+# def write_rendered(original_file_path: Path, rendered: str) -> Path:
+#     digest = hashlib.sha256(str(original_file_path).encode("utf-8")).hexdigest()[:12]
+#     out_dir = Path(tempfile.gettempdir()) / "llm-template-engine"
+#     out_dir.mkdir(parents=True, exist_ok=True)
+# 
+#     out_path = out_dir / f"{original_file_path.name}.{digest}{RENDERED_SUFFIX}"
+#     out_path.write_text(rendered, encoding="utf-8")
+#     return out_path
 
 
 def rewrite_cat_command(command: str, rendered_path: Path) -> str:
@@ -241,21 +246,21 @@ def rewrite_cat_command(command: str, rendered_path: Path) -> str:
     return "".join(parts)
 
 
-def claude_output(reason: str | None, updated_args: dict | None) -> str:
-    payload = {"hookEventName": "PreToolUse", "permissionDecision": "allow"}
+def hook_output(protocol: Tool, reason: str | None, updated_args: dict | None) -> str:
+    # Claude Code wants the payload wrapped in hookSpecificOutput 
+    # and calls the rewritten args "updatedInput".
+    # Copilot wants it flat and calls them "modifiedArgs".
+    payload: dict = {"permissionDecision": "allow"}
+    args_key = "modifiedArgs"
+    if protocol == Tool.ClaudeCode:
+        payload["hookEventName"] = "PreToolUse"
+        args_key = "updatedInput"
     if reason is not None:
         payload["permissionDecisionReason"] = reason
     if updated_args is not None:
-        payload["updatedInput"] = updated_args
-    return json.dumps({"hookSpecificOutput": payload}, ensure_ascii=False)
-
-
-def copilot_output(reason: str | None, updated_args: dict | None) -> str:
-    payload = {"permissionDecision": "allow"}
-    if reason is not None:
-        payload["permissionDecisionReason"] = reason
-    if updated_args is not None:
-        payload["modifiedArgs"] = updated_args
+        payload[args_key] = updated_args
+    if protocol == Tool.ClaudeCode:
+        return json.dumps({"hookSpecificOutput": payload}, ensure_ascii=False)
     return json.dumps(payload, ensure_ascii=False)
 
 def sniff_protocol() -> Tool:
@@ -307,6 +312,8 @@ def parse_hook_read_payload(payload: dict) -> ToolCall:
     if tool_name.lower() == "bash":
         command = tool_args.get("command") or ""
         for segment in COMMAND_SEPARATOR.split(command):
+            if CWD_CHANGING_COMMAND.match(segment):
+                break
             match = CAT_COMMAND.match(segment)
             if match is None:
                 continue
@@ -321,12 +328,13 @@ def parse_hook_read_payload(payload: dict) -> ToolCall:
             )
             break
 
-    if file_name and not Path(file_name).is_absolute():
-        file_name = str(Path(working_dir) / file_name)
+    file_path: Path | None = Path(file_name) if file_name else None
+    if file_path is not None and not file_path.is_absolute():
+        file_path = Path(working_dir) / file_path
 
     return ToolCall(
         is_read=is_read,
-        file_path=file_name,
+        file_path=file_path,
         cwd=Path(working_dir),
         tool_args=tool_args,
         path_key=path_key,
@@ -342,18 +350,20 @@ def read_payload() -> dict:
 
 
 def decide(call: ToolCall, include: re.Pattern[str] | None, exclude: re.Pattern[str] | None) -> tuple[str | None, dict | None]:
-    if not call.is_read or not call.file_path:
+    if not call.is_read or call.file_path is None:
         logger.debug("tool call is not file_read, PASS call=%s", call)
         return None, None
 
-    file_path = Path(call.file_path)
+    file_path = call.file_path
     if not is_template(file_path, include, exclude):
         logger.debug("file is not a template, PASS call=%s", call)
         return None, None
 
-    if not file_path.is_absolute():
-        # Copilot may pass paths relative to the session cwd.
-        file_path = Path(call.cwd or Path.cwd()) / file_path
+    # A missing file is the host tool's error to report ("file not found"),
+    # not a render error of ours.
+    if not file_path.is_file():
+        logger.debug("template file does not exist, PASS file=%s", file_path)
+        return None, None
 
     logger.debug("rendering template for file=%s", file_path)
     try:
@@ -362,7 +372,15 @@ def decide(call: ToolCall, include: re.Pattern[str] | None, exclude: re.Pattern[
         logger.error("error parsing template, let the tool to read it error=%s", exc)
         return f"Error rendering '{file_path.name}': {exc}", None
 
-    rendered_path = write_rendered(file_path, rendered)
+    # Write the rendered template in a temp file and point the tool
+    # to it instead of the original one. 
+    # Overwrit the same template at every execution to prevent the tempfolder from growing
+    digest = hashlib.sha256(str(file_path).encode("utf-8")).hexdigest()[:12]
+    out_dir = Path(tempfile.gettempdir()) / "llm-template-engine"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    rendered_path = out_dir / f"{file_path.name}.{digest}{RENDERED_SUFFIX}"
+    rendered_path.write_text(rendered, encoding="utf-8")    
     logger.debug("template rendered in file=%s", rendered_path)
 
     updated_args = dict(call.tool_args)
@@ -417,10 +435,7 @@ if __name__ == "__main__":
         # empty stdout = no decision: with nothing to say about this call the
         # hook must stay silent, not approve it on the user's behalf
         if reason is not None or updated_args is not None:
-            if protocol == Tool.ClaudeCode:
-                print(claude_output(reason, updated_args))
-            elif protocol == Tool.CopilotCLI:
-                print(copilot_output(reason, updated_args))
+            print(hook_output(protocol, reason, updated_args))
         
     except Exception as mainexc:  # noqa: BLE001 - the hook must report *any* failure  
         print(f"render_template hook error: {mainexc}\n{traceback.format_exc()}", file=sys.stderr)
