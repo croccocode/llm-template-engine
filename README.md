@@ -1,37 +1,37 @@
-#  
-⚠️ Warning: this could lead in untrusted code and template injection! (see below, #Security)
+# llm-template-engine
+⚠️ Warning: this could lead to untrusted code execution and template injection! (see below, #Security)
 
-A ClaudeCode/Copilot hook that render templated prompt files on the fly using [MiniJinja](https://github.com/mitsuhiko/minijinja).
+A ClaudeCode/Copilot hook that renders templated prompt files on the fly using [MiniJinja](https://github.com/mitsuhiko/minijinja).
 
-Evey tool call burns tokens. Often prompts include references to other files and instructions 
-that few months ago would have been just few lines of script
-This simple prompt will cost 3 Tool API call and probably 4 API Call (input token, output token), ~90k tokens
+Every tool call burns tokens. Often prompts include references to other files and instructions 
+that a few months ago would have been just a few lines of script.
+This simple prompt will cost 3 tool API calls and probably 4 API calls (input token, output token), ~90k tokens
 ```prompt
 Read the instruction at ../another/file.md 
-and perform those instruction on any *.json file in the folder ./zoo  
+and perform those instructions on any *.json file in the folder ./zoo  
 ```
 
-**llm-template-engine** cut the token usage by ~30%, by rewriting the template as follow:
+**llm-template-engine** cuts the token usage by rewriting the template as follows:
 ```jinja
 
 Apply these instructions
-{% include ../another/file.md %}
+{% include "../another/file.md" %}
 
 To each of these files
-{{ sh("ls -1") }}
+{{ sh("ls -1 ./zoo/*.json") }}
 ```
 
 ## 30% token reduction? Really?
-This is what we see in the templates we are rewriting. We are working on publi benchmarks
+This is what we see in the templates we are rewriting. We are working on public benchmarks.
 
 # How does it work
 You need to have [uv](https://docs.astral.sh/uv/getting-started/installation/) installed in your system.
-Register the script `render_template.py` as `preToolUse` hook. It will intercepts every read of files.
+Register the script `template_engine.py` as `preToolUse` hook. It will intercept every read of files.
 If the file is a template, it will be rendered in a temporary folder and the hook will redirect the tool to 
 the rendered template.
 
-A file is considered a template accordingly to its name:
-- By default, `*.tpl.md` and `*.tpl.txt` files are considered a template
+A file is considered a template according to its name:
+- By default, `*.tpl.md` and `*.tpl.txt` files are considered templates;
 - flag `--include=<regexp>`: only names matching the regexp are templates (replaces the default rule);
 - flag `--exclude=<regexp>`: names matching the regexp are never templates (wins over `--include`).
 
@@ -59,7 +59,7 @@ Register this hook in `.claude/settings.json`
 
 ## Copilot
 ⚠️ Duplicate hook execution!
-[Copilot reads both Claude Code hooks and Copilot hooks](https://docs.github.com/en/copilot/reference/hooks-reference?utm_source=chatgpt.com#hooks-locations) 
+[Copilot reads both Claude Code hooks and Copilot hooks](https://docs.github.com/en/copilot/reference/hooks-reference#hooks-locations).
 Do not register the Copilot hook if you have already registered the Claude hook. 
 
 To register the hook in Copilot, add a new file `.github/hooks/render-template.json`:
@@ -94,11 +94,11 @@ uv run --script https://raw.githubusercontent.com/croccocode/llm-template-engine
 
 # Security
 By default, every `.tpl.md` and `.tpl.txt` read is rendered, and `sh()`, `eval()` and `exec()` run with your privileges. 
-reading untrusted files (cloned repos, downloads) executes their content. Narrow the selection with --include.
+Reading untrusted files (cloned repos, downloads) executes their content. Narrow the selection with `--include`.
 
 
 # Developer
 Run tests and linter
 ```shell
-/.shMakefile test
+./shMakefile test
 ```
