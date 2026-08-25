@@ -79,6 +79,54 @@ To register the hook in Copilot, add a new file `.github/hooks/render-template.j
 }
 ```
 
+# Supported Templating Syntax
+The template engin is [MiniJinja](https://docs.rs/minijinja/latest/minijinja/), you can use everything from there
+
+## Template functions
+
+### `sh(command)`
+Runs `command` with `bash -c` from the session cwd and interpolates its stdout, trailing newline stripped. 
+A non-zero exit or a timeout (30s) aborts the render.
+
+```jinja
+Review these files:
+{{ sh("ls -1 ./zoo/*.json") }}
+
+Current schema:
+{{ sh("python scripts/dump_schema.py") }}
+```
+
+### `eval(expression)`
+Evaluates a single Python expression and interpolates the resulting value. Use
+it for the small computations that would otherwise cost a tool call: arithmetic,
+string formatting, a comprehension. Any exception aborts the render.
+
+```jinja
+Budget per file: {{ eval("round(90_000 / 12)") }} tokens
+Retry delays: {{ eval("[2 ** n for n in range(5)]") }}
+```
+
+### `exec(code)`
+Runs a Python snippet, which may contain statements and imports. 
+Returns the variables it defined as a map. 
+The python `exec` function returns nothing, so the snippet's namespace is the return value: 
+
+```jinja
+{% set ns = exec("
+import json, pathlib
+
+# `cfg` and `targets` willbe exported in the `ns` dict 
+cfg = json.loads(pathlib.Path('config.json').read_text())
+targets = sorted(cfg['services'])
+") %}
+
+# yep, ns.<variable>
+Deploy to {{ ns.targets | length }} services:
+{% for t in ns.targets %}
+- {{ t }}
+{% endfor %}
+```
+
 # Debug and troubleshooting
 
 To enable the debug log, add the `--debug` flag to the tool:
