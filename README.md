@@ -1,18 +1,17 @@
-# llm-template-engine
-⚠️ Warning: templates are code — sh(), eval() and exec() run with your privileges. By default every .md/.txt read is rendered: reading untrusted files (cloned repos, downloads) executes their content. Narrow the selection with --include.
+#  
+⚠️ Warning: this could lead in untrusted code and template injection! (see below, #Security)
 
 A ClaudeCode/Copilot hook that render templated prompt files on the fly using [MiniJinja](https://github.com/mitsuhiko/minijinja).
 
-Evey tool call burn tokens. Often prompts include references to other files and instructions that could few months ago
-would have been just few lines of code:
-
+Evey tool call burns tokens. Often prompts include references to other files and instructions 
+that few months ago would have been just few lines of script
+This simple prompt will cost 3 Tool API call and probably 4 API Call (input token, output token), ~90k tokens
 ```prompt
 Read the instruction at ../another/file.md 
 and perform those instruction on any *.json file in the folder ./zoo  
 ```
 
-This simple prompt will cost 3 Tool API call and probably 4 API Call (input token, output token)
-This code allows you to reqrite the template as follows:
+**llm-template-engine** cut the token usage by ~30%, by rewriting the template as follow:
 ```jinja
 
 Apply these instructions
@@ -20,25 +19,25 @@ Apply these instructions
 
 To each of these files
 {{ sh("ls -1") }}
-
-
 ```
 
+## 30% token reduction? Really?
+This is what we see in the templates we are rewriting. We are working on publi benchmarks
 
 # How does it work
-Add a `preToolUse` hook intercepts every read of a `.tpl.md` file, expands it with **MiniJinja** (includes resolved first in the file's own directory, then in the project root; `sh("…")` to interpolate the output of a bash script) and returns the already-rendered content directly in the `deny` message, without writing compiled files to disk.
+You need to have [uv](https://docs.astral.sh/uv/getting-started/installation/) installed in your system.
+Register the script `render_template.py` as `preToolUse` hook. It will intercepts every read of files.
+If the file is a template, it will be rendered in a temporary folder and the hook will redirect the tool to 
+the rendered template.
 
-The same engine runs on two agents: **Claude Code** and **GitHub Copilot CLI**. A single hook serves both: the protocol changes, not the logic.
-
-By default every `.md` and `.txt` file is a template. Two optional flags change the selection,
-both matched against the file name only, both repeatable:
-
-- `--include=<regexp>`: only names matching the regexp are templates (replaces the default suffix rule);
-- `--exclude=<regexp>`: names matching the regexp are never templates (wins over `--include`).
-
+A file is considered a template accordingly to its name:
+- By default, `*.tpl.md` and `*.tpl.txt` files are considered a template
+- flag `--include=<regexp>`: only names matching the regexp are templates (replaces the default rule);
+- flag `--exclude=<regexp>`: names matching the regexp are never templates (wins over `--include`).
 
 ## Claude Code
-```shell
+Register this hook in `.claude/settings.json`
+```json
 {
   "hooks": {
     "PreToolUse": [
@@ -47,7 +46,7 @@ both matched against the file name only, both repeatable:
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PROJECT_DIR}\\hooks\\render_template.mjs\" --protocol claude",
+            "command": "uv run --script https://raw.githubusercontent.com/croccocode/llm-template-engine/main/template_engine.py",
             "timeout": 60
           }
         ]
@@ -56,14 +55,14 @@ both matched against the file name only, both repeatable:
   }
 }
 ```
+
+
 ## Copilot
-!! OCCHIO !!
-Scrivi che copilot legge anche gli hook di claude 
-https://docs.github.com/en/copilot/reference/hooks-reference?utm_source=chatgpt.com#hooks-locations
-il codice si aspetta il payload dell'evento in formato claude sempre
+⚠️ Duplicate hook execution!
+[Copilot reads both Claude Code hooks and Copilot hooks](https://docs.github.com/en/copilot/reference/hooks-reference?utm_source=chatgpt.com#hooks-locations) 
+Do not register the Copilot hook if you have already registered the Claude hook. 
 
-For Copilot CLI, a new file `.github/hooks/render-template.json`:
-
+To register the hook in Copilot, add a new file `.github/hooks/render-template.json`:
 ```json
 {
   "version": 1,
@@ -72,7 +71,7 @@ For Copilot CLI, a new file `.github/hooks/render-template.json`:
       {
         "type": "command",
         "matcher": "Read|Bash",
-        "bash": "uv run --script /Users/totomz/Documents/croccocode/llm-template-engine/template_engine.py",
+        "bash": "uv run --script https://raw.githubusercontent.com/croccocode/llm-template-engine/main/template_engine.py",
         "timeoutSec": 60
       }
     ]
@@ -80,24 +79,26 @@ For Copilot CLI, a new file `.github/hooks/render-template.json`:
 }
 ```
 
-## Dbug and troubleshooting
-Com faccio a sapere se funiziona? per chè mi ritrovo questo nel prompt!
-```
-Read prompt.md Denied by preToolUse hook: 'prompt.md' is a source template. Here is the content of the file
-```
+# Debug and troubleshooting
 
 To enable the debug log, add the `--debug` flag to the tool:
 ```
-"bash": "uv run --script /Users/totomz/Documents/croccocode/llm-template-engine/template_engine.py --debug",
+uv run --script https://raw.githubusercontent.com/croccocode/llm-template-engine/main/template_engine.py --debug
 ```
 
-# Requirements
-Either NodeJS and npx or Python + uv 
-Overhead is ~100 ms per call, all of it Node and WASM startup. 
-There is nothing to provision on first run, so no cache to warm up beforehand.
+To specify custom include or exclude filters:
+```
+uv run --script https://raw.githubusercontent.com/croccocode/llm-template-engine/main/template_engine.py --include=<regexp> --exclude=<regexp>
+```
+
+
+# Security
+By default, every `.tpl.md` and `.tpl.txt` read is rendered, and `sh()`, `eval()` and `exec()` run with your privileges. 
+reading untrusted files (cloned repos, downloads) executes their content. Narrow the selection with --include.
+
 
 # Developer
-## Run tests and linter
+Run tests and linter
 ```shell
 /.shMakefile test
 ```
