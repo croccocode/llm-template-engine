@@ -1,4 +1,6 @@
 # llm-template-engine
+[![test](https://github.com/croccocode/llm-template-engine/actions/workflows/test.yml/badge.svg)](https://github.com/croccocode/llm-template-engine/actions/workflows/test.yml)
+
 ⚠️ Warning: this could lead to untrusted code execution and template injection! (see below, #Security)
 
 A ClaudeCode/Copilot hook that renders templated prompt files on the fly using [MiniJinja](https://github.com/mitsuhiko/minijinja).
@@ -23,6 +25,11 @@ To each of these files
 
 ## 30% token reduction? Really?
 This is what we see in the templates we are rewriting. We are working on public benchmarks.
+
+# Need Help With Your Prompts?
+We're a boutique consulting firm specializing in complex agentic frameworks implementation ad optimization.
+We work with international companies in luxury eyewear, vision care, digital services and education, as well as tech startups.
+Get in touch https://croccocode.com !
 
 # How does it work
 You need to have [uv](https://docs.astral.sh/uv/getting-started/installation/) installed in your system.
@@ -150,3 +157,6 @@ Run tests and linter
 ```shell
 ./shMakefile test
 ```
+
+Tagging:
+Create a new tag/release with the manual github action "tag"
