@@ -1,0 +1,10 @@
+{
+	"hook_event_name": "PreToolUse",
+	"session_id": "7cee4d66-2593-403b-87f4-1332512bec88",
+	"timestamp": "2026-08-24T07:55:18.088Z",
+	"cwd": "/Users/totomz/Desktop/test-llm-template",
+	"tool_name": "Read",
+	"tool_input": {
+		"path": "/Users/totomz/Desktop/test-llm-template/prompt.md"
+	}
+}

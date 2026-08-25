@@ -1,0 +1,16 @@
+{
+	"session_id": "04711800-7baf-4abc-9377-01724f37b793",
+	"transcript_path": "/Users/totomz/.claude/projects/-Users-totomz-Desktop-test-llm-template/04711800-7baf-4abc-9377-01724f37b793.jsonl",
+	"cwd": "/Users/totomz/Desktop/test-llm-template",
+	"prompt_id": "8269ad7c-9d64-4eea-8f3a-e1a90ebe3e0e",
+	"permission_mode": "default",
+	"effort": {
+		"level": "high"
+	},
+	"hook_event_name": "PreToolUse",
+	"tool_name": "Read",
+	"tool_input": {
+		"file_path": "/Users/totomz/Desktop/test-llm-template/prompt.md"
+	},
+	"tool_use_id": "toolu_01Gs2Ry3UjtTg32jqrXJuSQ4"
+}

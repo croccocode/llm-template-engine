@@ -1,0 +1,17 @@
+{
+	"session_id": "8d3f1c72-6f19-4f4c-a4d2-64c152294100",
+	"transcript_path": "/Users/totomz/.claude/projects/-Users-totomz-Desktop-test-llm-template/8d3f1c72-6f19-4f4c-a4d2-64c152294100.jsonl",
+	"cwd": "/Users/totomz/Desktop/test-llm-template",
+	"prompt_id": "3a7d1b91-133f-4896-9e65-86cba9f3cfea",
+	"permission_mode": "auto",
+	"effort": {
+		"level": "high"
+	},
+	"hook_event_name": "PreToolUse",
+	"tool_name": "Bash",
+	"tool_input": {
+		"command": "ls -la && echo \"---PROMPT---\" && cat prompt.md",
+		"description": "List directory and read prompt.md"
+	},
+	"tool_use_id": "toolu_01GZFveYdBUj6yHzG9gzwrpZ"
+}

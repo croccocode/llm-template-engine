@@ -1,0 +1,17 @@
+{
+	"session_id": "077b74ac-c3c3-43eb-9bc3-5b9d90eddbe3",
+	"transcript_path": "/Users/totomz/.claude/projects/-Users-totomz-Desktop-test-llm-template/077b74ac-c3c3-43eb-9bc3-5b9d90eddbe3.jsonl",
+	"cwd": "/Users/totomz/Desktop/test-llm-template",
+	"prompt_id": "eb83338a-2f88-4030-8904-3c98719097bf",
+	"permission_mode": "auto",
+	"effort": {
+		"level": "high"
+	},
+	"hook_event_name": "PreToolUse",
+	"tool_name": "Bash",
+	"tool_input": {
+		"command": "cat /Users/totomz/Desktop/test-llm-template/prompt.md",
+		"description": "Read prompt.md"
+	},
+	"tool_use_id": "toolu_01XLmmf1L6iPKVxPxaBKVPTa"
+}
